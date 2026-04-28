@@ -418,6 +418,23 @@ ToolSearch("+aidefence")        → aidefence_scan, aidefence_is_safe, aidefence
 \`\`\``;
 }
 
+function nativeCapabilities(): string {
+  return `## Native Claude Code Capabilities (PREFER OVER MCP) — ADR-091
+
+When running inside Claude Code, ALWAYS prefer native tools over MCP equivalents:
+
+| Need | Use This | Not This |
+|------|----------|----------|
+| Periodic tasks | \`/loop\` with ScheduleWakeup (delay <270s for cache) | \`daemon start\` |
+| Live monitoring | \`Monitor("npx @claude-flow/cli swarm watch --stream")\` | Polling \`swarm status\` |
+| Background workers | \`CronCreate("audit", "*/15 * * * *", "...")\` | \`daemon start --background\` |
+| Agent isolation | \`Task({ ..., isolation: "worktree" })\` | Shared worktree |
+| Multi-agent comms | \`TeamCreate\` + \`SendMessage\` | Memory namespace coordination |
+| Cross-session | \`PushNotification\` + \`RemoteTrigger\` | No equivalent |
+
+MCP tool responses include hints: \`[LOOP_SUGGESTION]\`, \`[MONITOR_AVAILABLE]\`, \`[CRON_SUGGESTION]\`, \`[TEAM_SUGGESTION]\`, \`[WORKTREE_SUGGESTION]\` — follow them. In CI/headless, Ruflo falls back to daemon mode automatically.`;
+}
+
 function setupAndBoundary(): string {
   return `## Quick Setup
 
@@ -448,6 +465,7 @@ npx @claude-flow/cli@latest doctor --fix
 const TEMPLATE_SECTIONS: Record<ClaudeMdTemplate, Array<(opts: InitOptions) => string>> = {
   minimal: [
     behavioralRules,
+    (_opts) => nativeCapabilities(),
     fileOrganization,
     projectArchitecture,
     (_opts) => buildAndTest(),
@@ -460,6 +478,7 @@ const TEMPLATE_SECTIONS: Record<ClaudeMdTemplate, Array<(opts: InitOptions) => s
   ],
   standard: [
     behavioralRules,
+    (_opts) => nativeCapabilities(),
     fileOrganization,
     projectArchitecture,
     (_opts) => buildAndTest(),
@@ -476,6 +495,7 @@ const TEMPLATE_SECTIONS: Record<ClaudeMdTemplate, Array<(opts: InitOptions) => s
   ],
   full: [
     behavioralRules,
+    (_opts) => nativeCapabilities(),
     fileOrganization,
     projectArchitecture,
     (_opts) => buildAndTest(),
@@ -497,6 +517,7 @@ const TEMPLATE_SECTIONS: Record<ClaudeMdTemplate, Array<(opts: InitOptions) => s
   ],
   security: [
     behavioralRules,
+    (_opts) => nativeCapabilities(),
     fileOrganization,
     projectArchitecture,
     (_opts) => buildAndTest(),
@@ -512,6 +533,7 @@ const TEMPLATE_SECTIONS: Record<ClaudeMdTemplate, Array<(opts: InitOptions) => s
   ],
   performance: [
     behavioralRules,
+    (_opts) => nativeCapabilities(),
     fileOrganization,
     projectArchitecture,
     (_opts) => buildAndTest(),
