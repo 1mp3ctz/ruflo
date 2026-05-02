@@ -157,6 +157,17 @@ app.post('/functions/v1/optimize-research-config', async (c) => {
   return c.json(result.body, { status: result.status as 200 | 400 | 402 | 429 | 500 | 502 });
 });
 
+// Surface LLM credential resolution at startup so operators see whether
+// the server will run real or mock — without leaking the key value.
+function describeLlmCreds(): string {
+  if (process.env.ANTHROPIC_API_KEY) return 'ANTHROPIC_API_KEY env (real LLM)';
+  if (process.env.GCLOUD_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT) {
+    const secret = process.env.RUFLO_ANTHROPIC_SECRET_NAME ?? 'ruflo-anthropic-api-key';
+    return `gcloud Secret Manager (${secret})`;
+  }
+  return 'NONE — handlers will serve mock responses';
+}
+
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   // eslint-disable-next-line no-console
   console.log(`RuFlo functions dev server listening on http://localhost:${info.port}`);
@@ -168,4 +179,6 @@ serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`  Token: ${SERVER_TOKEN === 'dev-token-change-me' ? 'DEV DEFAULT (set RUFLO_FUNCTIONS_TOKEN before deploy)' : 'configured'}`);
   // eslint-disable-next-line no-console
   console.log(`  Rate limit: ${RATE_LIMIT_PER_MIN} req/min per IP`);
+  // eslint-disable-next-line no-console
+  console.log(`  LLM creds: ${describeLlmCreds()}`);
 });

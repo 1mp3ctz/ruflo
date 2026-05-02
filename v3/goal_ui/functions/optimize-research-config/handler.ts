@@ -1,19 +1,21 @@
 /**
- * optimize-research-config — port of `supabase/functions/optimize-research-config`.
+ * optimize-research-config — Anthropic-direct port.
  *
- * Same contract as the Deno original: takes `{preset, currentGoal?}`,
- * returns `{config: ResearchConfig}` (or `{error}` on 429/402/5xx).
+ * Same wire contract: takes `{preset, currentGoal?}`, returns
+ * `{config: ResearchConfig}` (or `{error}` on 429/402/5xx via the
+ * `_lib/llm.ts` envelope).
  *
- * Mock mode when `LOVABLE_API_KEY` unset returns a canned config.
+ * Mock mode when no API key resolves: returns a canned config.
  *
  * NOTE: per-preset prompt corpus (~250 lines of templates in the
  * Deno original) is reduced to a single generic prompt here. Full
  * corpus port is a polish follow-up — wiring/contract is what
- * matters for Step 21a's DoD.
+ * matters for the migration's DoD.
  */
 
 import { z } from 'zod';
 import { wrapUserInput } from '../_lib/sanitize';
+import { callLlmWithTool, isLlmAvailable } from '../_lib/llm';
 
 const SYSTEM_PROMPT =
   'You are an expert research workflow architect specializing in GOAP ' +
@@ -24,28 +26,19 @@ const ToolOutputSchema = z.object({
   config: z.object({}).passthrough(),
 });
 
-const TOOL = {
-  type: 'function',
-  function: {
-    name: 'generate_config',
-    description: 'Generate optimized research config for the preset',
-    parameters: {
+const TOOL_PARAMS = {
+  type: 'object',
+  properties: {
+    config: {
       type: 'object',
       properties: {
-        config: {
-          type: 'object',
-          properties: {
-            researchGuidance: { type: 'object', additionalProperties: true },
-            parameters: { type: 'object', additionalProperties: true },
-            filters: { type: 'object', additionalProperties: true },
-          },
-          additionalProperties: true,
-        },
+        researchGuidance: { type: 'object' },
+        parameters: { type: 'object' },
+        filters: { type: 'object' },
       },
-      required: ['config'],
-      additionalProperties: false,
     },
   },
+  required: ['config'],
 } as const;
 
 export interface OptimizeRequest {
@@ -66,9 +59,7 @@ export async function optimizeResearchConfigHandler(
     return { status: 400, body: { error: 'preset is required (string)' } };
   }
 
-  const key = process.env.LOVABLE_API_KEY;
-  if (!key) {
-    // Canned mock config — preserves shape callers expect.
+  if (!(await isLlmAvailable())) {
     return {
       status: 200,
       body: {
@@ -89,34 +80,16 @@ export async function optimizeResearchConfigHandler(
   }
 
   const userPrompt = `Optimize research settings for preset: ${wrapUserInput(preset)}. Goal: ${wrapUserInput(currentGoal || 'general research')}`;
-  const upstream = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'google/gemini-2.5-flash',
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userPrompt },
-      ],
-      tools: [TOOL],
-      tool_choice: { type: 'function', function: { name: 'generate_config' } },
-    }),
+
+  const result = await callLlmWithTool({
+    system: SYSTEM_PROMPT,
+    user: userPrompt,
+    tool: { name: 'generate_config', description: 'Generate optimized research config for the preset', parameters: TOOL_PARAMS },
   });
 
-  if (!upstream.ok) {
-    if (upstream.status === 429) return { status: 429, body: { error: 'Rate limits exceeded. Please try again later.' } };
-    if (upstream.status === 402) return { status: 402, body: { error: 'AI usage limit reached. Please add credits to continue.' } };
-    return { status: 502, body: { error: `AI gateway error: ${upstream.status}` } };
-  }
+  if (result.status !== 200) return { status: result.status, body: { error: result.error } };
 
-  const data = (await upstream.json()) as {
-    choices?: Array<{ message?: { tool_calls?: Array<{ function?: { arguments?: string } }> } }>;
-  };
-  const args = data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
-  if (!args) return { status: 502, body: { error: 'No tool call in AI response' } };
-  let raw: unknown;
-  try { raw = JSON.parse(args); } catch { return { status: 502, body: { error: 'Failed to parse AI tool-call arguments' } }; }
-  const validated = ToolOutputSchema.safeParse(raw);
+  const validated = ToolOutputSchema.safeParse(result.input);
   if (!validated.success) {
     return { status: 502, body: { error: 'AI tool-call output failed schema validation' } };
   }

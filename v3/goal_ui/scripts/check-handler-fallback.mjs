@@ -17,19 +17,19 @@
  * Run: `npx tsx scripts/check-handler-fallback.mjs`
  */
 
-const malformedToolCallResponse = (badArgs) => ({
+// Anthropic Messages-API tool_use response shape (the wire format
+// our `_lib/llm.ts` adapter parses). We pass a malformed `input`
+// (already parsed JSON) so handler-level Zod validation can fail.
+const malformedToolCallResponse = (toolName, badInput) => ({
   ok: true,
   status: 200,
   json: async () => ({
-    choices: [
-      {
-        message: {
-          tool_calls: [{ function: { arguments: badArgs } }],
-        },
-      },
+    content: [
+      { type: 'tool_use', id: 'tu_test', name: toolName, input: badInput },
     ],
+    stop_reason: 'tool_use',
   }),
-  text: async () => 'malformed',
+  text: async () => JSON.stringify({ content: [{ type: 'tool_use', name: toolName, input: badInput }] }),
 });
 
 let pass = 0, fail = 0;
@@ -38,8 +38,14 @@ function check(label, ok) {
   else { console.log(`  ✘ ${label}`); fail++; }
 }
 
-// Force real-mode (not mock mode) so the validation path runs
-process.env.LOVABLE_API_KEY = 'test-key-not-actually-used';
+// Force real-mode (not mock mode) so the validation path runs.
+// `_lib/secrets.ts` resolves `ANTHROPIC_API_KEY` first, ahead of the
+// gcloud Secret Manager fallback — fastest test path.
+process.env.ANTHROPIC_API_KEY = 'sk-ant-test-key-not-actually-used';
+delete process.env.GCLOUD_PROJECT_ID;
+delete process.env.GOOGLE_CLOUD_PROJECT;
+const { _resetSecretsCacheForTesting } = await import('../functions/_lib/secrets.ts');
+_resetSecretsCacheForTesting();
 
 const ORIGINAL_FETCH = global.fetch;
 
@@ -57,7 +63,7 @@ console.log('[1/4] generate-research-goal: malformed `goals` array');
 {
   const { generateResearchGoalHandler } = await import('../functions/generate-research-goal/handler.ts');
   const result = await withFetch(
-    async () => malformedToolCallResponse(JSON.stringify({ goals: 'not-an-array' })),
+    async () => malformedToolCallResponse('generate_goals', { goals: 'not-an-array' }),
     () => generateResearchGoalHandler({ category: 'finance' })
   );
   check(`status === 502 (got ${result.status})`, result.status === 502);
@@ -69,7 +75,7 @@ console.log('[2/4] research-step: malformed `findings` array');
 {
   const { researchStepHandler } = await import('../functions/research-step/handler.ts');
   const result = await withFetch(
-    async () => malformedToolCallResponse(JSON.stringify({ findings: [{ title: '' }] })), // empty title fails min(1)
+    async () => malformedToolCallResponse('return_findings', { findings: [{ title: '' }] }), // empty title fails min(1)
     () => researchStepHandler({ goal: 'g', stepTitle: 't', stepDescription: 'd', stepType: 'st' })
   );
   check(`status === 502 (got ${result.status})`, result.status === 502);
@@ -80,9 +86,9 @@ console.log('[3/4] generate-action-items: bad `priority` enum value');
 {
   const { generateActionItemsHandler } = await import('../functions/generate-action-items/handler.ts');
   const result = await withFetch(
-    async () => malformedToolCallResponse(JSON.stringify({
+    async () => malformedToolCallResponse('generate_action_plan', {
       actionItems: [{ title: 'A', description: 'B', priority: 'bogus', timeline: 'now' }]
-    })),
+    }),
     () => generateActionItemsHandler({ goal: 'g', researchContext: [], totalSteps: 0, totalDataPoints: 0 })
   );
   check(`status === 502 (got ${result.status})`, result.status === 502);
@@ -93,7 +99,7 @@ console.log('[4/4] optimize-research-config: missing `config` field');
 {
   const { optimizeResearchConfigHandler } = await import('../functions/optimize-research-config/handler.ts');
   const result = await withFetch(
-    async () => malformedToolCallResponse(JSON.stringify({ wrongKey: 'wrong' })),
+    async () => malformedToolCallResponse('generate_config', { wrongKey: 'wrong' }),
     () => optimizeResearchConfigHandler({ preset: 'academic-deep' })
   );
   check(`status === 502 (got ${result.status})`, result.status === 502);

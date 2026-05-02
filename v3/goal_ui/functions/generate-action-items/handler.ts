@@ -1,15 +1,19 @@
 /**
- * generate-action-items — port of `supabase/functions/generate-action-items`.
+ * generate-action-items — Anthropic-direct handler.
  *
- * Same contract: takes `{goal, researchContext, totalSteps, totalDataPoints}`
- * and returns `{actionItems: Array<{title, description, priority, timeline, ...}>}`
- * (or `{error}` on 429/402/5xx).
+ * Takes `{goal, researchContext, totalSteps, totalDataPoints}` and
+ * returns `{actionItems: Array<RichActionItem>, summary?}` — same wire
+ * shape ResearchReportModal renders against. Errors propagate as
+ * `{error}` on 429/402/5xx via the `_lib/llm.ts` envelope.
  *
- * Mock mode when `LOVABLE_API_KEY` unset returns 3 canned action items.
+ * Mock mode when no API key resolves: returns 3 canned action items
+ * matching the rich Modal contract (id, resources, metrics, risks,
+ * references, etc.) so the demo flow renders end-to-end.
  */
 
 import { z } from 'zod';
 import { wrapUserInput } from '../_lib/sanitize';
+import { callLlmWithTool, isLlmAvailable } from '../_lib/llm';
 
 interface ContextFinding { title: string; content: string; source?: string }
 interface ContextStep { stepTitle: string; findings: ContextFinding[] }
@@ -52,67 +56,60 @@ const SYSTEM_PROMPT =
   'recommendations based on research findings. Each item must be specific, ' +
   'tied to a finding, and have a clear priority + timeline.';
 
-const TOOL = {
-  type: 'function',
-  function: {
-    name: 'generate_action_plan',
-    description: 'Generate contextual action items + executive summary from research findings',
-    parameters: {
-      type: 'object',
-      properties: {
-        actionItems: {
-          type: 'array',
-          items: {
+const TOOL_PARAMS = {
+  type: 'object',
+  properties: {
+    actionItems: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          title: { type: 'string' },
+          description: { type: 'string' },
+          timeline: { type: 'string' },
+          timelineDetails: { type: 'string' },
+          priority: { type: 'string', enum: ['High', 'Medium', 'Low'] },
+          resources: {
             type: 'object',
             properties: {
-              id: { type: 'string' },
-              title: { type: 'string' },
-              description: { type: 'string' },
-              timeline: { type: 'string' },
-              timelineDetails: { type: 'string' },
-              priority: { type: 'string', enum: ['High', 'Medium', 'Low'] },
-              resources: {
-                type: 'object',
-                properties: {
-                  budget: { type: 'string' },
-                  team: { type: 'string' },
-                  tools: { type: 'array', items: { type: 'string' } },
-                },
-              },
-              metrics: { type: 'array', items: { type: 'string' } },
-              risks: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    risk: { type: 'string' },
-                    mitigation: { type: 'string' },
-                  },
-                  required: ['risk', 'mitigation'],
-                },
-              },
-              references: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    title: { type: 'string' },
-                    url: { type: 'string' },
-                  },
-                  required: ['title', 'url'],
-                },
-              },
-              researchContext: { type: 'string' },
+              budget: { type: 'string' },
+              team: { type: 'string' },
+              tools: { type: 'array', items: { type: 'string' } },
             },
-            required: ['title', 'description', 'priority', 'timeline'],
           },
-          minItems: 1,
+          metrics: { type: 'array', items: { type: 'string' } },
+          risks: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                risk: { type: 'string' },
+                mitigation: { type: 'string' },
+              },
+              required: ['risk', 'mitigation'],
+            },
+          },
+          references: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                url: { type: 'string' },
+              },
+              required: ['title', 'url'],
+            },
+          },
+          researchContext: { type: 'string' },
         },
-        summary: { type: 'string' },
+        required: ['title', 'description', 'priority', 'timeline'],
       },
-      required: ['actionItems'],
+      minItems: 1,
     },
+    summary: { type: 'string' },
   },
+  required: ['actionItems'],
 } as const;
 
 export interface GenerateActionItemsRequest {
@@ -135,13 +132,12 @@ export async function generateActionItemsHandler(
     return { status: 400, body: { error: 'goal is required (string)' } };
   }
 
-  const key = process.env.LOVABLE_API_KEY;
-  if (!key) {
+  if (!(await isLlmAvailable())) {
     const goalShort = goal.slice(0, 60);
     const mockItem = (id: string, title: string, priority: 'High' | 'Medium' | 'Low', timeline: string): unknown => ({
       id,
       title,
-      description: `[mock] ${title}. This action is generated by the local-functions mock handler. Set LOVABLE_API_KEY on the functions host for real LLM responses.`,
+      description: `[mock] ${title}. This action is generated by the local-functions mock handler. Set ANTHROPIC_API_KEY (or configure Secret Manager) on the functions host for real LLM responses.`,
       timeline,
       timelineDetails: `[mock] Phase breakdown for ${timeline}. Actual phase plan would come from the LLM.`,
       priority,
@@ -173,51 +169,32 @@ export async function generateActionItemsHandler(
           mockItem('2', `[mock] Scale validated approach across "${goalShort}"`, 'Medium', 'next 4-8 weeks'),
           mockItem('3', `[mock] Long-term optimization for "${goalShort}"`, 'Low', 'this quarter'),
         ],
-        summary: `[mock] Executive summary for "${goalShort}". The local-functions handler is in mock mode because LOVABLE_API_KEY is not set on this host. Real LLM responses would synthesize the prior research findings into a 2-3 paragraph briefing here.`,
+        summary: `[mock] Executive summary for "${goalShort}". The local-functions handler is in mock mode because no API key resolved. Set ANTHROPIC_API_KEY (or configure Secret Manager) on the functions host for real LLM responses.`,
         mock: true,
       },
     };
   }
 
-  let summary = '';
+  let findings = '';
   for (const step of researchContext ?? []) {
-    summary += `\n${wrapUserInput(step.stepTitle)}:\n`;
+    findings += `\n${wrapUserInput(step.stepTitle)}:\n`;
     for (const f of step.findings ?? []) {
-      summary += `• ${wrapUserInput(f.title)}: ${wrapUserInput(f.content)}\n`;
-      if (f.source) summary += `  Source: ${wrapUserInput(f.source)}\n`;
+      findings += `• ${wrapUserInput(f.title)}: ${wrapUserInput(f.content)}\n`;
+      if (f.source) findings += `  Source: ${wrapUserInput(f.source)}\n`;
     }
   }
 
-  const userPrompt = `Research goal: ${wrapUserInput(goal)}\n\nFindings:${summary || '\n(no findings)'}\n\nGenerate prioritized action items.`;
+  const userPrompt = `Research goal: ${wrapUserInput(goal)}\n\nFindings:${findings || '\n(no findings)'}\n\nGenerate prioritized action items.`;
 
-  const upstream = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'google/gemini-2.5-flash',
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userPrompt },
-      ],
-      tools: [TOOL],
-      tool_choice: { type: 'function', function: { name: 'generate_action_plan' } },
-    }),
+  const result = await callLlmWithTool({
+    system: SYSTEM_PROMPT,
+    user: userPrompt,
+    tool: { name: 'generate_action_plan', description: 'Generate contextual action items + executive summary from research findings', parameters: TOOL_PARAMS },
   });
 
-  if (!upstream.ok) {
-    if (upstream.status === 429) return { status: 429, body: { error: 'Rate limits exceeded' } };
-    if (upstream.status === 402) return { status: 402, body: { error: 'AI usage limit reached. Please add credits to continue.' } };
-    return { status: 502, body: { error: `AI gateway error: ${upstream.status}` } };
-  }
+  if (result.status !== 200) return { status: result.status, body: { error: result.error } };
 
-  const data = (await upstream.json()) as {
-    choices?: Array<{ message?: { tool_calls?: Array<{ function?: { arguments?: string } }> } }>;
-  };
-  const args = data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
-  if (!args) return { status: 502, body: { error: 'No tool call in AI response' } };
-  let raw: unknown;
-  try { raw = JSON.parse(args); } catch { return { status: 502, body: { error: 'Failed to parse AI tool-call arguments' } }; }
-  const validated = ToolOutputSchema.safeParse(raw);
+  const validated = ToolOutputSchema.safeParse(result.input);
   if (!validated.success) {
     return { status: 502, body: { error: 'AI tool-call output failed schema validation' } };
   }

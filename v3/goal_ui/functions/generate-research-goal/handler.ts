@@ -1,26 +1,26 @@
 /**
  * generate-research-goal — pure handler, framework-agnostic.
  *
- * Port of `supabase/functions/generate-research-goal/index.ts` (Deno)
- * to Node. Same wire format, same Lovable AI Gateway backend, same
- * 429/402/5xx → status-code translation. Differences:
+ * Calls Anthropic Messages API directly via `_lib/llm.ts`. No Lovable
+ * gateway. API key resolved through `_lib/secrets.ts` (env var or
+ * Google Cloud Secret Manager). Returns a normalized `{status, body}`
+ * envelope so it can wrap under either Hono (LOCAL_FN dev) or GCF (prod)
+ * without re-implementing transport.
  *
- *   - Uses Node's built-in fetch (Node 22+) instead of Deno's std lib
- *   - Reads `LOVABLE_API_KEY` from `process.env` instead of `Deno.env`
- *   - Returns a normalized `{ status, body }` instead of a Response
- *     so it can be wrapped by either Hono (LOCAL_FN dev) or GCF
- *     (production) without re-implementing transport.
+ * Security:
  *   - User-supplied strings wrapped in `<user_input>` delimiters
- *     and LLM tool-call output validated against a Zod schema
- *     (ADR-093 §S3 / Step 22c).
+ *     (ADR-093 §S3 / Step 22c)
+ *   - Tool-call output validated against a Zod schema; malformed
+ *     responses → 502 (no leakage of unsafe content)
  *
- * Mock mode: if `LOVABLE_API_KEY` is unset, returns 3 canned goals
- * tagged with the requested category so the wiring can be exercised
- * locally without an upstream key. Unsuitable for production —
- * deployment must set the key.
+ * Mock mode: when no API key resolves (no env var, Secret Manager
+ * unavailable / unset), returns 3 canned goals tagged with the
+ * category. The caller is expected to surface the `mock: true` flag
+ * to operators.
  */
 import { z } from 'zod';
 import { wrapUserInput } from '../_lib/sanitize';
+import { callLlmWithTool, isLlmAvailable } from '../_lib/llm';
 
 const ToolOutputSchema = z.object({
   goals: z
@@ -57,33 +57,24 @@ const CATEGORY_PROMPTS: Record<string, string> = {
   'ai-ml': 'Generate 3 CUTTING-EDGE, diverse research goals for AI, Machine Learning, and Autonomous Agents. MUST vary across: (1) agentic AI systems, (2) novel architectures or training paradigms, (3) real-world applications or societal implications.',
 };
 
-const TOOL = {
-  type: 'function',
-  function: {
-    name: 'generate_goals',
-    description: 'Generate 3 specific research goals for the given category',
-    parameters: {
-      type: 'object',
-      properties: {
-        goals: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              title: { type: 'string', description: 'A concise, specific research goal (1-2 sentences max)' },
-              category: { type: 'string', description: 'The category this goal belongs to' },
-            },
-            required: ['title', 'category'],
-            additionalProperties: false,
-          },
-          minItems: 3,
-          maxItems: 3,
+const TOOL_PARAMS = {
+  type: 'object',
+  properties: {
+    goals: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'A concise, specific research goal (1-2 sentences max)' },
+          category: { type: 'string', description: 'The category this goal belongs to' },
         },
+        required: ['title', 'category'],
       },
-      required: ['goals'],
-      additionalProperties: false,
+      minItems: 3,
+      maxItems: 3,
     },
   },
+  required: ['goals'],
 } as const;
 
 export interface GenerateResearchGoalRequest {
@@ -104,12 +95,9 @@ export async function generateResearchGoalHandler(
     return { status: 400, body: { error: 'category is required (string)' } };
   }
 
-  const key = process.env.LOVABLE_API_KEY;
-
-  // Mock mode — no upstream call, return canned goals so the wiring
-  // can be exercised without secrets. Disabled in production by
-  // requiring the key at deploy time (Step 22a will add a CI check).
-  if (!key) {
+  // Mock mode — no upstream credentials → return canned goals so the
+  // wiring can be exercised without secrets. Operators see `mock: true`.
+  if (!(await isLlmAvailable())) {
     return {
       status: 200,
       body: {
@@ -123,54 +111,21 @@ export async function generateResearchGoalHandler(
     };
   }
 
-  // Wrap user-supplied strings in delimiters before composing the prompt.
   const safeCategory = wrapUserInput(category);
   const safeContext = wrapUserInput(customContext ?? category);
   const userPrompt =
     CATEGORY_PROMPTS[category.toLowerCase()] ??
     `Generate 3 innovative, boundary-pushing research goals based on: ${safeContext}. Category hint: ${safeCategory}.`;
 
-  const upstream = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${key}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'google/gemini-2.5-flash',
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userPrompt },
-      ],
-      tools: [TOOL],
-      tool_choice: { type: 'function', function: { name: 'generate_goals' } },
-    }),
+  const result = await callLlmWithTool({
+    system: SYSTEM_PROMPT,
+    user: userPrompt,
+    tool: { name: 'generate_goals', description: 'Generate 3 specific research goals for the given category', parameters: TOOL_PARAMS },
   });
 
-  if (!upstream.ok) {
-    if (upstream.status === 429) {
-      return { status: 429, body: { error: 'Rate limits exceeded. Please try again later.' } };
-    }
-    if (upstream.status === 402) {
-      return { status: 402, body: { error: 'AI usage limit reached. Please add credits to continue.' } };
-    }
-    return {
-      status: 502,
-      body: { error: `AI gateway error: ${upstream.status}` },
-    };
-  }
+  if (result.status !== 200) return { status: result.status, body: { error: result.error } };
 
-  const data = (await upstream.json()) as {
-    choices?: Array<{ message?: { tool_calls?: Array<{ function?: { arguments?: string } }> } }>;
-  };
-  const args = data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
-  if (!args) {
-    return { status: 502, body: { error: 'No tool call in AI response' } };
-  }
-  let raw: unknown;
-  try { raw = JSON.parse(args); }
-  catch { return { status: 502, body: { error: 'Failed to parse AI tool-call arguments' } }; }
-  const validated = ToolOutputSchema.safeParse(raw);
+  const validated = ToolOutputSchema.safeParse(result.input);
   if (!validated.success) {
     return { status: 502, body: { error: 'AI tool-call output failed schema validation' } };
   }

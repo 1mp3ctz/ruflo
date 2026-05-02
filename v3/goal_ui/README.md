@@ -80,7 +80,7 @@ The widget exposes a global `window.RufloResearchWidget` with `init(containerId)
 
 ## Tech Stack
 
-React 18 · TypeScript 5 · Vite 5 · Tailwind 3 · shadcn/ui · Radix UI · React Query · React Router · Hono (Node) + Google Cloud Functions · RVF (IndexedDB) + ruvector ONNX-WASM (MiniLM-L6, 384d) · GOAP A* planner · Playwright e2e
+React 18 · TypeScript 5 · Vite 5 · Tailwind 3 · shadcn/ui · Radix UI · React Query · React Router · Hono (Node) + Google Cloud Functions · Anthropic Messages API · gcloud Secret Manager · RVF (IndexedDB) + ruvector ONNX-WASM (MiniLM-L6, 384d) · GOAP A* planner · Playwright e2e
 
 ## Browser Persistence (RVF + ruvector ONNX-WASM)
 
@@ -106,7 +106,33 @@ The 4 wired AI workflows (research-goal generation, per-step research, action-it
 - **Local dev** — Hono on `:8787` (`npm run functions:dev`), CORS allowlist, X-RuFlo-Token check, 60 req/min per-IP rate limit
 - **Production** — Google Cloud Functions (entrypoints in `functions/<name>/index.ts`)
 
+**LLM provider:** Anthropic Messages API directly (no Lovable AI Gateway, no third-party proxy). Default model: `claude-haiku-4-5-20251001` (override via `RUFLO_LLM_MODEL`).
+
+**Credential resolution** — `functions/_lib/secrets.ts` resolves on first call and caches:
+
+1. `ANTHROPIC_API_KEY` env var — fastest local-dev path
+2. **Google Cloud Secret Manager** — required for prod, supported in shared-dev:
+   - Project ID from `GCLOUD_PROJECT_ID` (or auto-detected `GOOGLE_CLOUD_PROJECT` set by GCF)
+   - Secret name from `RUFLO_ANTHROPIC_SECRET_NAME` (default `ruflo-anthropic-api-key`)
+   - Version `latest`
+3. Fall through → handlers serve mock responses (canned `[mock]` strings; the demo flow still renders end-to-end)
+
 Each handler validates LLM tool-call output via Zod and wraps user input in `<user_input>...</user_input>` delimiters (close-tag injection stripped). Malformed model output → 502 (no leakage of unsafe content).
+
+**Setup the production secret (one-time):**
+
+```bash
+# Create the secret
+gcloud secrets create ruflo-anthropic-api-key --replication-policy=automatic
+
+# Add a version
+echo -n "sk-ant-..." | gcloud secrets versions add ruflo-anthropic-api-key --data-file=-
+
+# Grant access to the GCF runtime service account
+gcloud secrets add-iam-policy-binding ruflo-anthropic-api-key \
+  --member="serviceAccount:<runtime-sa>@<project>.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+```
 
 ## Quality Gates
 
@@ -137,11 +163,13 @@ VITE_FUNCTIONS_BASE_URL=http://localhost:8787   # LOCAL_FN dev / GCF prod URL
 VITE_FUNCTIONS_PUBLIC_TOKEN=dev-token-change-me # weak abuse-control token
 
 # === Server-only (NEVER VITE_-prefixed) ===
-LOVABLE_API_KEY=...           # upstream LLM gateway key — set on functions host only
-ANTHROPIC_API_KEY=...         # alternative direct LLM provider — host-only
-RUFLO_FUNCTIONS_TOKEN=...     # production override of public token (validated server-side)
-RUFLO_ALLOWED_ORIGINS=...     # CSV CORS allowlist (defaults: localhost:8080,goal.ruv.io)
-RUFLO_RATE_LIMIT_PER_MIN=60   # per-IP token bucket
+ANTHROPIC_API_KEY=sk-ant-...                # local-dev fallback (Secret Manager preferred for prod)
+GCLOUD_PROJECT_ID=my-gcp-project            # required for Secret Manager fallback
+RUFLO_ANTHROPIC_SECRET_NAME=ruflo-anthropic-api-key  # override default secret name
+RUFLO_LLM_MODEL=claude-haiku-4-5-20251001   # override default model
+RUFLO_FUNCTIONS_TOKEN=...                   # production override of public token (validated server-side)
+RUFLO_ALLOWED_ORIGINS=...                   # CSV CORS allowlist (defaults: localhost:8080,goal.ruv.io)
+RUFLO_RATE_LIMIT_PER_MIN=60                 # per-IP token bucket
 ```
 
 Per [ADR-093 §S1](../docs/adr/ADR-093-goal-ui-ruvector-wasm.md), the `VITE_*` rule is enforced by `npm run check:secrets`: any `VITE_*=key-shape` assignment fails the build.

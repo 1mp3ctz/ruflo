@@ -1,19 +1,16 @@
 /**
- * research-step — port of `supabase/functions/research-step`.
+ * research-step — Anthropic-direct port. Calls `_lib/llm.ts` with a
+ * tool-forced request. API key resolved via `_lib/secrets.ts`.
  *
- * Same contract: takes `{goal, stepTitle, stepDescription, stepType,
- * aiModel?, config?, previousStepsData?}` and returns an array of
- * `DataItem` (or `{error}` on 429/402/5xx). The Deno original's
- * full prompt-construction logic is preserved structurally; per-step-
- * type prompt templates are reduced to a generic prompt here (full
- * corpus port is a polish follow-up).
+ * Returns a flat array of `ResearchDataItem` (not `{findings: [...]}`)
+ * to preserve the wire shape the UI consumes.
  *
- * Mock mode when `LOVABLE_API_KEY` unset returns 3 canned data
- * items for the requested stepTitle.
+ * Mock mode when no API key resolves: returns 3 canned findings.
  */
 
 import { z } from 'zod';
 import { wrapUserInput } from '../_lib/sanitize';
+import { callLlmWithTool, isLlmAvailable } from '../_lib/llm';
 
 interface ResearchDataItem {
   title: string;
@@ -40,34 +37,25 @@ const SYSTEM_PROMPT =
   'Prefer authoritative sources, named entities, and concrete metrics ' +
   'over vague summaries.';
 
-const TOOL = {
-  type: 'function',
-  function: {
-    name: 'return_findings',
-    description: 'Return findings for the current research step',
-    parameters: {
-      type: 'object',
-      properties: {
-        findings: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              title: { type: 'string' },
-              content: { type: 'string' },
-              source: { type: 'string' },
-              confidence: { type: 'number' },
-            },
-            required: ['title', 'content'],
-            additionalProperties: false,
-          },
-          minItems: 1,
+const TOOL_PARAMS = {
+  type: 'object',
+  properties: {
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          content: { type: 'string' },
+          source: { type: 'string' },
+          confidence: { type: 'number' },
         },
+        required: ['title', 'content'],
       },
-      required: ['findings'],
-      additionalProperties: false,
+      minItems: 1,
     },
   },
+  required: ['findings'],
 } as const;
 
 export interface ResearchStepRequest {
@@ -93,8 +81,7 @@ export async function researchStepHandler(
     return { status: 400, body: { error: 'goal and stepTitle are required (strings)' } };
   }
 
-  const key = process.env.LOVABLE_API_KEY;
-  if (!key) {
+  if (!(await isLlmAvailable())) {
     return {
       status: 200,
       body: [
@@ -105,10 +92,8 @@ export async function researchStepHandler(
     };
   }
 
-  // Prior step content is LLM-generated but treated as untrusted —
-  // wrap each finding in <user_input> delimiters so a model can't
-  // emit prompt-injection content that's then reflected back to the
-  // upstream model unwrapped.
+  // Prior step content is LLM-generated → wrap as untrusted to defeat
+  // injection that would otherwise round-trip into the next prompt.
   const ctx = (req.previousStepsData ?? []).map(s =>
     `${wrapUserInput(s.stepTitle)}:\n` + s.data.map(d => `- ${wrapUserInput(d.title)}: ${wrapUserInput(d.content)}`).join('\n')
   ).join('\n\n');
@@ -119,37 +104,19 @@ export async function researchStepHandler(
     ctx ? `Prior step findings:\n${ctx}` : 'No prior steps yet.',
   ].join('\n\n');
 
-  const upstream = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: req.aiModel || 'google/gemini-2.5-flash',
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userPrompt },
-      ],
-      tools: [TOOL],
-      tool_choice: { type: 'function', function: { name: 'return_findings' } },
-    }),
+  const result = await callLlmWithTool({
+    system: SYSTEM_PROMPT,
+    user: userPrompt,
+    tool: { name: 'return_findings', description: 'Return findings for the current research step', parameters: TOOL_PARAMS },
+    model: req.aiModel,
   });
 
-  if (!upstream.ok) {
-    if (upstream.status === 429) return { status: 429, body: { error: 'Rate limits exceeded. Please try again later.' } };
-    if (upstream.status === 402) return { status: 402, body: { error: 'AI usage limit reached. Please add credits to continue.' } };
-    return { status: 502, body: { error: `AI gateway error: ${upstream.status}` } };
-  }
+  if (result.status !== 200) return { status: result.status, body: { error: result.error } };
 
-  const data = (await upstream.json()) as {
-    choices?: Array<{ message?: { tool_calls?: Array<{ function?: { arguments?: string } }> } }>;
-  };
-  const args = data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
-  if (!args) return { status: 502, body: { error: 'No tool call in AI response' } };
-  let raw: unknown;
-  try { raw = JSON.parse(args); } catch { return { status: 502, body: { error: 'Failed to parse AI tool-call arguments' } }; }
-  const validated = ToolOutputSchema.safeParse(raw);
+  const validated = ToolOutputSchema.safeParse(result.input);
   if (!validated.success) {
     return { status: 502, body: { error: 'AI tool-call output failed schema validation' } };
   }
-  // Original returns a flat array (NOT wrapped in {findings:...}) — preserve that wire shape.
+  // UI expects a flat array, not `{findings: [...]}`.
   return { status: 200, body: validated.data.findings as ResearchDataItem[] };
 }
