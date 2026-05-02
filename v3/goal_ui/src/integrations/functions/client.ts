@@ -18,7 +18,22 @@ export async function invokeFunction<T = unknown>(
   name: string,
   body: unknown,
 ): Promise<FunctionResult<T>> {
-  const url = `${FUNCTIONS_BASE_URL}/functions/v1/${name}`;
+  // URL routing detection — two deployment styles:
+  //
+  //   1. Path-routed (LOCAL_FN Hono server, Cloud Run, API Gateway):
+  //      BASE=http://localhost:8787  →  URL=BASE/functions/v1/<name>
+  //
+  //   2. Per-function-prefixed (Cloud Functions Gen2 per-handler):
+  //      BASE=https://<region>-<proj>.cloudfunctions.net/ruflo-
+  //      → URL=BASE<name>   (each function is its own URL root)
+  //
+  // We auto-detect via a trailing hyphen on the base URL — that's the
+  // convention documented in `docs/DEPLOYMENT-GCP.md` ("Set the
+  // frontend's VITE_FUNCTIONS_BASE_URL to:
+  //   https://${REGION}-${PROJECT_ID}.cloudfunctions.net/ruflo-").
+  const url = FUNCTIONS_BASE_URL.endsWith('-')
+    ? `${FUNCTIONS_BASE_URL}${name}`
+    : `${FUNCTIONS_BASE_URL}/functions/v1/${name}`;
 
   let resp: Response;
   try {

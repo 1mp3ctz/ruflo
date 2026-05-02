@@ -50,8 +50,23 @@ async function fetchFromSecretManager(): Promise<string | null> {
 }
 
 /**
+ * Sentinel value the operator can store in Secret Manager (or in the
+ * `ANTHROPIC_API_KEY` env var) to FORCE mock mode without leaving the
+ * secret unset. Useful for first-deploy smoke tests where you want
+ * the functions deployed + reachable but don't want to either (a)
+ * spend tokens or (b) fail Cloud Functions startup on a missing
+ * secret. When `getAnthropicApiKey()` sees this exact string, it
+ * treats it as "no key resolved" and returns null.
+ */
+export const MOCK_MODE_SENTINEL = '__MOCK_MODE__';
+
+/**
  * Get the Anthropic API key. Returns null when neither the local env var
  * nor Secret Manager produces a value — caller should activate mock mode.
+ *
+ * Also returns null when the resolved value equals `MOCK_MODE_SENTINEL`,
+ * so operators can ship a placeholder Secret Manager value and have
+ * handlers cleanly fall back to mock responses.
  *
  * Re-fetches at most once per process: cache hit returns the prior value
  * (including null) without re-attempting Secret Manager.
@@ -60,12 +75,21 @@ export async function getAnthropicApiKey(): Promise<string | null> {
   if (cachedKey !== undefined) return cachedKey;
 
   const fromEnv = env('ANTHROPIC_API_KEY');
-  if (fromEnv) {
+  if (fromEnv && fromEnv !== MOCK_MODE_SENTINEL) {
     cachedKey = fromEnv;
     return cachedKey;
   }
+  if (fromEnv === MOCK_MODE_SENTINEL) {
+    cachedKey = null;
+    return cachedKey;
+  }
 
-  cachedKey = await fetchFromSecretManager();
+  const fromSecret = await fetchFromSecretManager();
+  if (fromSecret === MOCK_MODE_SENTINEL) {
+    cachedKey = null;
+    return cachedKey;
+  }
+  cachedKey = fromSecret;
   return cachedKey;
 }
 

@@ -33,7 +33,10 @@ import { researchStepHandler } from './research-step/handler';
 import { generateActionItemsHandler } from './generate-action-items/handler';
 import { optimizeResearchConfigHandler } from './optimize-research-config/handler';
 
-const PORT = Number(process.env.FUNCTIONS_PORT ?? '8787');
+// Cloud Run injects PORT — honor it. Fall back to FUNCTIONS_PORT
+// (the goal_ui dev convention) and finally to 8787 for local
+// `npm run functions:dev`.
+const PORT = Number(process.env.PORT ?? process.env.FUNCTIONS_PORT ?? '8787');
 
 const ALLOWED_ORIGINS = (
   process.env.RUFLO_ALLOWED_ORIGINS ?? 'http://localhost:8080,https://goal.ruv.io'

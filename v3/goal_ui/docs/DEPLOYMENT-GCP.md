@@ -3,6 +3,13 @@
 > Concrete commands for deploying `v3/goal_ui/` to GCP. Replaces the Netlify/Lovable
 > assumptions in `docs/DEPLOYMENT.md`. Adopts ADR-093 (Anthropic-direct + Secret
 > Manager), ADR-094 (security primitives), and ADR-098 (MCP server topology).
+>
+> **Note (2026-05-02):** Functions backend pivoted from per-handler Cloud Functions
+> Gen2 to a single **Cloud Run service** that hosts the existing Hono router
+> (`functions/server.ts`). One URL covers all routes; matches the SPA's
+> path-based routing (`${BASE}/functions/v1/<name>`); no per-fn package.json
+> fragmentation; TypeScript boots via `npm start` (`tsx functions/server.ts`).
+> See `scripts/gcp-deploy-cloudrun.sh`.
 
 ## Topology
 
