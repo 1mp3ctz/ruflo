@@ -34,7 +34,13 @@ import { runMemoryCommand } from './commands/memory.js';
 export * from './types.js';
 export * as output from './output.js';
 export type { MCPTool, MCPToolInputSchema, MCPToolResult } from './mcp-tools/types.js';
+export type { MCPToolDef } from './mcp-tools/memory-defs.js';
 export * as validateInput from './mcp-tools/validate-input.js';
+
+// MCP tool *definitions* (alpha.2) — pure data, no handlers.
+export { memoryToolDefs } from './mcp-tools/memory-defs.js';
+export { hooksToolDefs } from './mcp-tools/hooks-defs.js';
+export { allToolDefs } from './mcp-tools/index.js';
 
 // Memory abstraction — alpha.1
 export type {
