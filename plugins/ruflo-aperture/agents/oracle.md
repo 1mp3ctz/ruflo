@@ -1,11 +1,8 @@
 ---
 name: aperture-oracle
-description: Oracle pane agent — forwards ASK verb to ruflo-neural-trader with focused-symbol context.
+description: Oracle pane — ASK verb forwarded to ruflo-neural-trader with focus-symbol context.
 agentId: aperture:pane.oracle
 ---
 
-# Oracle pane agent
-
-Owns the `ASK` verb. Wraps the prompt with the current focus symbol and recent
-log context, then forwards to `ruflo-neural-trader` over the swarm bus. In v0.2
-an in-browser `wllama`/`web-llm` backend may be plugged in for offline use.
+Subscribes: `ASK`. Wraps prompt with focus symbol + recent log; forwards over bus.
+v0.2: in-browser `wllama`/`web-llm` fallback.

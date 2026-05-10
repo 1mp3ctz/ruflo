@@ -1,18 +1,23 @@
 # ruflo-aperture
 
-Thin TS plugin wrapper for the [`aperture`](../../aperture/) Rust+WASM workspace.
-Surfaces the four v0.1 pane-agents (Quote, Chart, Watchlist, Oracle) and the
-`/aperture` slash command to ruflo.
-
-The actual logic lives in `aperture/`; this directory only exists so the plugin
-ships through ruflo's IPFS plugin registry alongside `ruflo-market-data` and
-`ruflo-neural-trader`.
+Plugin wrapper for the [`aperture`](../../aperture/) Rust+WASM workspace. Logic lives in `aperture/`; this exists for IPFS distribution alongside `ruflo-market-data` / `ruflo-neural-trader`.
 
 ## Pane → Agent map
 
 | Pane | Agent ID | Backed by |
 |---|---|---|
 | Quote | `aperture:pane.quote` | `aperture-data` `DataSource::quote()` |
-| Chart | `aperture:pane.chart` | OHLCV via swarm bus → `ruflo-market-data` HNSW patterns |
-| Watchlist | `aperture:pane.watchlist` | `KeyValueStore` (sled native / OPFS WASM) |
-| Oracle | `aperture:pane.oracle` | ASK forwarded over swarm bus → `ruflo-neural-trader` |
+| Chart | `aperture:pane.chart` | OHLCV + `ruflo-market-data` HNSW |
+| Watchlist | `aperture:pane.watchlist` | `KeyValueStore` (sled / OPFS) |
+| Oracle | `aperture:pane.oracle` | `ruflo-neural-trader` over bus |
+
+## Verbs
+
+| Verb | Owner | Reply |
+|---|---|---|
+| `DESC` | `pane.quote` | `QUOTE.RESULT` |
+| `CHART [range]` | `pane.chart` | `CHART.RESULT` |
+| `WATCH` / `UNWATCH` / `LIST` | `pane.watchlist` | — |
+| `ASK "..."` | `pane.oracle` | `ASK.RESULT` |
+| `FOCUS` | broadcast | — (re-anchor) |
+| `QUOTE` / `OHLCV` | `agent.data` | `*.RESULT` |
