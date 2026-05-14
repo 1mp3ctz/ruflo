@@ -22,7 +22,7 @@ FAILURES=()
 
 # Lock to the version this plugin is pinned against so a global
 # npx cache doesn't shadow a stale local install.
-NT_PIN="${NT_PIN:-2.8.1}"
+NT_PIN="${NT_PIN:-2.8.9}"
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -87,6 +87,28 @@ if npx neural-trader --version 2>&1 | grep -qE "^${NT_PIN%.*}\."; then
 else
   bad "version mismatch"
 fi
+
+# Helper: run a command and assert a jq path is non-null.
+assert_field() {
+  local label="$1" field="$2"
+  shift 2
+  step "$label"
+  local out value
+  out=$(npx neural-trader "$@" 2>&1)
+  value=$(echo "$out" | jq -r "$field" 2>/dev/null)
+  if [[ -n "$value" && "$value" != "null" && "$value" != "false" ]]; then
+    ok
+  else
+    bad "field $field missing/null/false — head: $(echo "$out" | head -3 | tr '\n' '|')"
+  fi
+}
+
+assert_field "11. backtest exposes Kelly fraction"   '.metrics.kellyFraction'    --backtest --symbol AAPL
+assert_field "12. --walk-forward returns windows"    '.walkForward.windowsRun'   --backtest --symbol AAPL --walk-forward --period 2023-01-01..2024-12-31
+assert_field "13. --monte-carlo returns distribution" '.monteCarlo.distribution.median' --backtest --symbol AAPL --monte-carlo --mc-runs 100
+assert_field "14. --optimize returns best Sharpe"    '.optimization.best.sharpeRatio' --backtest --symbol AAPL --optimize --param fast_ma:10:20:5
+assert_field "15. --signal scan returns ≥1 signal"   '.signalsCount'             --signal scan --symbols AAPL,MSFT
+assert_field "16. multi-symbol aggregate"            '.aggregate.bestSymbol'     --backtest --symbols AAPL,MSFT,GOOGL
 
 echo ""
 echo "$PASS passed, $FAIL failed"
