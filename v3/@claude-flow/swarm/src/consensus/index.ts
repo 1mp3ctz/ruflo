@@ -16,6 +16,7 @@ import {
 import { RaftConsensus, createRaftConsensus, RaftConfig } from './raft.js';
 import { ByzantineConsensus, createByzantineConsensus, ByzantineConfig } from './byzantine.js';
 import { GossipConsensus, createGossipConsensus, GossipConfig } from './gossip.js';
+import type { ConsensusTransport } from './transport.js';
 
 export { RaftConsensus, ByzantineConsensus, GossipConsensus };
 export type { RaftConfig, ByzantineConfig, GossipConfig };
@@ -74,6 +75,14 @@ export class ConsensusEngine extends EventEmitter implements IConsensusEngine {
       this.config = { ...this.config, ...config };
     }
 
+    // ADR-095 G2.2 — narrow the typed-as-unknown `transport` from
+    // ConsensusConfig into the real ConsensusTransport so Raft / Byzantine /
+    // Gossip get a working inter-node wire. Structural check, not
+    // instanceof, so test mocks satisfy it without importing transport.ts.
+    const transport = isConsensusTransport(this.config.transport)
+      ? this.config.transport
+      : undefined;
+
     // Create implementation based on algorithm
     switch (this.config.algorithm) {
       case 'raft':
@@ -82,6 +91,7 @@ export class ConsensusEngine extends EventEmitter implements IConsensusEngine {
           timeoutMs: this.config.timeoutMs,
           maxRounds: this.config.maxRounds,
           requireQuorum: this.config.requireQuorum,
+          transport,
         });
         break;
 
@@ -91,6 +101,7 @@ export class ConsensusEngine extends EventEmitter implements IConsensusEngine {
           timeoutMs: this.config.timeoutMs,
           maxRounds: this.config.maxRounds,
           requireQuorum: this.config.requireQuorum,
+          transport,
         });
         break;
 
@@ -100,6 +111,7 @@ export class ConsensusEngine extends EventEmitter implements IConsensusEngine {
           timeoutMs: this.config.timeoutMs,
           maxRounds: this.config.maxRounds,
           requireQuorum: this.config.requireQuorum,
+          transport,
         });
         break;
 
@@ -110,6 +122,7 @@ export class ConsensusEngine extends EventEmitter implements IConsensusEngine {
           timeoutMs: this.config.timeoutMs,
           maxRounds: this.config.maxRounds,
           requireQuorum: this.config.requireQuorum,
+          transport,
         });
         break;
 
@@ -260,6 +273,23 @@ export function createConsensusEngine(
   config?: Partial<ConsensusConfig>
 ): ConsensusEngine {
   return new ConsensusEngine(nodeId, { ...config, algorithm });
+}
+
+/**
+ * ADR-095 G2.2 — structural check that an opaque value implements the
+ * ConsensusTransport interface. Used by the engine to safely narrow the
+ * `transport` field on `ConsensusConfig` (typed as `unknown` to keep
+ * `types.ts` free of cross-module imports).
+ */
+function isConsensusTransport(value: unknown): value is ConsensusTransport {
+  if (!value || typeof value !== 'object') return false;
+  const t = value as Record<string, unknown>;
+  return typeof t.nodeId === 'string'
+      && typeof t.send === 'function'
+      && typeof t.broadcast === 'function'
+      && typeof t.onMessage === 'function'
+      && typeof t.peers === 'function'
+      && typeof t.close === 'function';
 }
 
 // Helper to select optimal algorithm based on requirements

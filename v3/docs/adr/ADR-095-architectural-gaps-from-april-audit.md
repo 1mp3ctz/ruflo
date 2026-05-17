@@ -200,6 +200,33 @@ Remaining for G2:
 
 Tracked in [#1872](https://github.com/ruvnet/ruflo/issues/1872) and PR #1905.
 
+### G2.2 — done (hive-mind MCP layer routes through the real ConsensusEngine)
+
+After the G2 transport abstraction landed, the `hive-mind_*` MCP tools were still a JSON-file state machine — they never instantiated `ConsensusEngine`, never touched `LocalTransport` / `FederationTransport`, and the hand-rolled raft/byzantine/quorum voting in `hive-mind_consensus` ran on top of `state.consensus.pending/history` instead of the real protocols. So the cross-host machinery from G2 was unreachable from the surface the LLM agents actually call.
+
+**Landed (PR #1872 follow-up, `@claude-flow/swarm@3.0.0-alpha.8` + `@claude-flow/cli@3.7.0-alpha.45`):**
+- `v3/@claude-flow/cli/src/mcp-tools/hive-consensus-runtime.ts` — process-level singleton that owns a real `ConsensusEngine` + `ConsensusTransport`. Lifecycle: `init` → `propose` / `vote` / `awaitConsensus` / `broadcast` → `status` → `shutdown`.
+- Transport selection logic:
+  - `transport: 'local'`        → `LocalTransport` (in-process registry). Legacy single-process behavior, but with the real engine.
+  - `transport: 'federation'`   → `FederationTransport` over `agentic-flow/transport/loader`. Cross-host wire. If the loader isn't installed, falls back to local with `degraded: true` + machine-parseable `fallbackReason`.
+  - `transport: 'auto'` (default) → silent fallback to local when federation isn't reachable; no noise unless the operator explicitly asked for federation.
+- `ConsensusConfig.transport` field added (typed `unknown` to keep `types.ts` free of cross-module imports; engine narrows via a structural check). `ConsensusEngine.initialize()` forwards it to Raft / Byzantine / Gossip — closes the gap where the inner protocols accepted a transport but the engine wrapper never passed one through.
+- `hive-mind_init` accepts `transport`, `algorithm`, `peers`; instantiates the runtime; returns `runtime: { engine, transport, algorithm, degraded, fallbackReason, peerCount }` so callers see which wire is actually live.
+- `hive-mind_consensus` adds two engine-routed paths:
+  - `action: 'propose'` with `useEngine: true` → real `engine.propose(value, proposerId)`.
+  - `action: 'vote'` with `useEngine: true` → real `engine.vote(proposalId, vote)`.
+  - New `action: 'engine-stats'` returns the live runtime status (initialized? algorithm? transport? peers? engine.getStats()?).
+  - Legacy JSON-state-machine voting preserved as default; `useEngine: false` (or unset) keeps backward compat.
+- `hive-mind_broadcast` proxies through `transport.broadcast` when the runtime is initialized; in-process peers get a real handler invocation, cross-host peers get the WS frame. Falls back to the file-state record when offline.
+- `hive-mind_shutdown` tears down the runtime alongside the file-state (returns `runtimeShutdown: true`).
+- Swarm-side ESM hygiene: `coordination/agent-registry.ts`, `task-orchestrator.ts`, `swarm-hub.ts` were missing `.js` extensions on their relative imports, which silently broke any non-vitest ESM consumer. Fixed alongside G2.2 — the test suite was hiding the issue because vitest's transform tolerated bare specifiers.
+- Tests: **10/10 new** in `v3/@claude-flow/cli/__tests__/hive-consensus-runtime.test.ts` covering transport selection (local/federation/auto), federation-loader-missing degradation, propose-vote round-trip via real engine, shutdown idempotency, re-init teardown, 3-node `LocalTransport` registry membership.
+- CI guard: `scripts/smoke-hive-consensus-engine.mjs` drives the real MCP handlers end-to-end and asserts `runtime.engine === 'enabled'`, `transport === 'local'`, `propose.engine === 'enabled'`, `shutdown.runtimeShutdown === true`. Wired as `hive-mind-consensus-engine-wire-up-smoke` in `v3-ci.yml`.
+
+Remaining for G3 (G2.3):
+- DiscoveryService integration: the runtime today takes an explicit peer list at init; the canonical peer source is the federation plugin's `DiscoveryService`. Wiring it in is the next step, with operator-consent gating.
+- Live mac ↔ ruvultra round (real `FederationTransport` over tailscale, not the in-process LocalTransport).
+
 ### Still open
 
 - **G5** — superseded by ADR-094; deps migration status tracked there.

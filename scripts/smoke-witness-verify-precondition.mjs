@@ -28,13 +28,14 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const REPO_ROOT = process.cwd();
 const VERIFY = resolve(REPO_ROOT, 'plugins/ruflo-core/scripts/witness/verify.mjs');
 const REAL_MANIFEST = resolve(REPO_ROOT, 'verification/macos/manifest.md.json');
+const ROOT_PKG = resolve(REPO_ROOT, 'package.json');
 
 if (!existsSync(VERIFY)) {
   console.error(`smoke: not found: ${VERIFY}`);
@@ -55,6 +56,34 @@ function record(name, condition, detail) {
     if (detail) console.log(`        ${detail}`);
     failures.push(name);
   }
+}
+
+// ── Case 0: @noble/ed25519 stays declared at the repo root ──────────
+// Regression guard for ruvnet/ruflo#2027. The 12h scheduled witness
+// runner installs root deps before calling verify.mjs. If a future
+// dep-cleanup PR drops @noble/ed25519 from the root package.json,
+// `npm ci` will silently stop installing it and the scheduled runner
+// will start re-filing the same precondition-miss issue every cycle.
+// Catch the silent drop here, in PRs, before it ships.
+console.log('Case 0: @noble/ed25519 declared at repo root (regression guard #2027)');
+{
+  const pkg = JSON.parse(readFileSync(ROOT_PKG, 'utf8'));
+  const declared = pkg.dependencies?.['@noble/ed25519']
+                ?? pkg.devDependencies?.['@noble/ed25519'];
+  record(
+    '@noble/ed25519 declared in root package.json',
+    typeof declared === 'string' && declared.length > 0,
+    `root package.json does not declare @noble/ed25519 — verify.mjs would exit 2 ` +
+    `on every scheduled run. See ruvnet/ruflo#1880 + #2027.`,
+  );
+  // verify.mjs uses the v2 API (ed.etc.sha512Sync, ed.getPublicKey, ed.verify).
+  // Pinning to ^2 prevents a major bump from breaking the verifier silently.
+  record(
+    '@noble/ed25519 pinned to ^2 (matches API verify.mjs uses)',
+    typeof declared === 'string' && /^[~^]?2\./.test(declared),
+    `declared=${declared} — verify.mjs uses the v2 API; a major bump must be ` +
+    `audited (see verifySignature in plugins/ruflo-core/scripts/witness/verify.mjs).`,
+  );
 }
 
 // ── Case 1: @noble/ed25519 missing → exit 2 (precondition) ──────────

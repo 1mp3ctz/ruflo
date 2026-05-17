@@ -2,12 +2,20 @@
  * Hive-Mind MCP Tools for CLI
  *
  * Tool definitions for collective intelligence and swarm coordination.
+ *
+ * ADR-095 G2.2 — these tools now delegate inter-node consensus to the real
+ * `@claude-flow/swarm` ConsensusEngine via `hive-consensus-runtime`. The
+ * legacy JSON-state-machine voting (in `hive-mind_consensus`'s 'propose' /
+ * 'vote' / 'status' / 'list' actions) remains as a fallback when the
+ * runtime isn't initialized — preserves backward compatibility for callers
+ * that skip `hive-mind_init` or run in a swarm-less context.
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { type MCPTool, getProjectCwd } from './types.js';
 import { validateIdentifier, validateText } from './validate-input.js';
+import { hiveConsensusRuntime, type HivePeerConfig, type HiveTransportKind, type HiveAlgorithm } from './hive-consensus-runtime.js';
 
 // Storage paths
 const STORAGE_DIR = '.claude-flow';
@@ -311,6 +319,33 @@ export const hiveMindTools: MCPTool[] = [
           description: 'Consensus strategy. Default: raft (anti-drift). Use byzantine for f<n/3 fault tolerance.',
         },
         queenId: { type: 'string', description: 'Initial queen agent ID' },
+        // ADR-095 G2.2 — pluggable transport for the underlying consensus
+        // engine. 'local' (default) preserves single-process behavior;
+        // 'federation' wires Raft/PBFT/Gossip over ADR-104 WS via
+        // agentic-flow; 'auto' picks federation when reachable + peers
+        // supplied, else local.
+        transport: {
+          type: 'string',
+          enum: ['local', 'federation', 'auto'],
+          description: 'Consensus transport. local=in-process; federation=ADR-104 WS (cross-host); auto=federation if reachable, else local. Default: auto.',
+        },
+        // ADR-095 G2.2 — peers for the consensus engine. When transport is
+        // 'federation' or 'auto', each peer should include a wire address
+        // (e.g. wss://host:8443) and optionally an Ed25519 public key PEM
+        // for inbound signature verification.
+        peers: {
+          type: 'array',
+          description: 'Consensus peer list. Each entry: { nodeId, address?, publicKeyPem? }.',
+          items: {
+            type: 'object',
+            properties: {
+              nodeId: { type: 'string' },
+              address: { type: 'string' },
+              publicKeyPem: { type: 'string' },
+            },
+            required: ['nodeId'],
+          },
+        },
       },
     },
     handler: async (input) => {
@@ -333,6 +368,41 @@ export const hiveMindTools: MCPTool[] = [
 
       saveHiveState(state);
 
+      // ADR-095 G2.2 — bring up the real consensus runtime so subsequent
+      // hive-mind_consensus / hive-mind_broadcast calls go through the
+      // engine + transport instead of the JSON state machine. Done after
+      // saveHiveState so a runtime failure doesn't leave persisted state
+      // inconsistent — we surface the runtime error in the response but
+      // the hive itself stays initialized at the file-state layer.
+      const requestedTransport = (input.transport as HiveTransportKind) || 'auto';
+      // Map the wider consensus strategy enum to the runtime's algorithm.
+      // 'crdt' and 'quorum' don't have engine implementations; they keep
+      // the legacy state-machine voting and we tag the runtime as 'raft'
+      // (the safe default — quorum semantics are layered on by the
+      // state-machine code in hive-mind_consensus below).
+      const runtimeAlgorithm: HiveAlgorithm =
+        requestedConsensus === 'byzantine' ? 'byzantine'
+        : requestedConsensus === 'gossip' ? 'gossip'
+        : 'raft';
+      const peers: HivePeerConfig[] = Array.isArray(input.peers)
+        ? (input.peers as unknown[]).filter((p): p is HivePeerConfig => {
+            return !!p && typeof p === 'object' && typeof (p as Record<string, unknown>).nodeId === 'string';
+          })
+        : [];
+
+      let runtimeResult: Awaited<ReturnType<typeof hiveConsensusRuntime.init>> | null = null;
+      let runtimeError: string | undefined;
+      try {
+        runtimeResult = await hiveConsensusRuntime.init({
+          nodeId: queenId,
+          algorithm: runtimeAlgorithm,
+          transport: requestedTransport,
+          peers,
+        });
+      } catch (err) {
+        runtimeError = err instanceof Error ? err.message : String(err);
+      }
+
       return {
         success: true,
         hiveId,
@@ -348,6 +418,22 @@ export const hiveMindTools: MCPTool[] = [
           memoryBackend: input.memoryBackend || 'hybrid',
         },
         createdAt: state.createdAt,
+        // ADR-095 G2.2 — runtime observability so callers know which
+        // transport / algorithm is actually live.
+        runtime: runtimeResult
+          ? {
+              engine: 'enabled',
+              algorithm: runtimeResult.algorithm,
+              transport: runtimeResult.transport,
+              degraded: runtimeResult.degraded,
+              fallbackReason: runtimeResult.fallbackReason,
+              peerCount: runtimeResult.peerCount,
+            }
+          : {
+              engine: 'unavailable',
+              error: runtimeError,
+              note: 'Consensus engine could not be brought up — legacy state-machine voting will be used for hive-mind_consensus / broadcast.',
+            },
       };
     },
   },
@@ -528,7 +614,7 @@ export const hiveMindTools: MCPTool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['propose', 'vote', 'status', 'list'], description: 'Consensus action' },
+        action: { type: 'string', enum: ['propose', 'vote', 'status', 'list', 'engine-stats'], description: 'Consensus action' },
         proposalId: { type: 'string', description: 'Proposal ID (for vote/status)' },
         type: { type: 'string', description: 'Proposal type (for propose)' },
         value: { description: 'Proposal value (for propose)' },
@@ -538,6 +624,12 @@ export const hiveMindTools: MCPTool[] = [
         quorumPreset: { type: 'string', enum: ['unanimous', 'majority', 'supermajority'], description: 'Quorum threshold preset (for quorum strategy, default: majority)' },
         term: { type: 'number', description: 'Term number (for raft strategy)' },
         timeoutMs: { type: 'number', description: 'Timeout in ms for raft re-proposal (default: 30000)' },
+        // ADR-095 G2.2 — route through the real consensus engine when set.
+        // Default false to preserve backward compatibility for callers that
+        // depend on the JSON-state-machine semantics (BFT detection across
+        // proposals, quorum presets, etc.).
+        useEngine: { type: 'boolean', description: 'Route propose/vote through the real ConsensusEngine (ADR-095 G2.2). Requires hive-mind_init to have brought up the runtime.' },
+        confidence: { type: 'number', description: 'Vote confidence 0-1 (only used when useEngine is true).' },
       },
       required: ['action'],
     },
@@ -550,6 +642,66 @@ export const hiveMindTools: MCPTool[] = [
       const action = input.action as string;
       const strategy = (input.strategy as ConsensusStrategy) || 'raft';
       const totalNodes = state.workers.length || 1;
+
+      // ADR-095 G2.2 — engine-stats surfaces the live runtime state.
+      // Returns a 'not-initialized' shape (not an error) when the runtime
+      // is offline so monitoring tools don't have to special-case startup.
+      if (action === 'engine-stats') {
+        const status = hiveConsensusRuntime.status();
+        return { action, ...status };
+      }
+
+      // ADR-095 G2.2 — when useEngine is true and the runtime is up,
+      // propose/vote go through the real ConsensusEngine. Falls back to
+      // the JSON-state-machine path below when the runtime isn't
+      // initialized, so callers that don't ask for engine routing get
+      // the legacy behavior.
+      const useEngine = input.useEngine === true && hiveConsensusRuntime.isInitialized();
+
+      if (useEngine && action === 'propose') {
+        try {
+          const proposal = await hiveConsensusRuntime.propose(
+            input.value,
+            (input.voterId as string) || (state.queen?.agentId ?? 'queen'),
+          );
+          return {
+            action,
+            proposalId: proposal.id,
+            type: (input.type as string) || 'general',
+            strategy: hiveConsensusRuntime.status().algorithm,
+            status: proposal.status,
+            term: proposal.term,
+            engine: 'enabled',
+            transport: hiveConsensusRuntime.status().transport,
+          };
+        } catch (err) {
+          return { action, error: `consensus engine propose failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      }
+
+      if (useEngine && action === 'vote') {
+        const voterId = input.voterId as string;
+        if (!voterId) return { action, error: 'voterId is required for voting' };
+        if (!input.proposalId) return { action, error: 'proposalId is required for voting' };
+        try {
+          await hiveConsensusRuntime.vote(input.proposalId as string, {
+            voterId,
+            approve: input.vote as boolean,
+            confidence: typeof input.confidence === 'number' ? (input.confidence as number) : 1.0,
+            timestamp: new Date(),
+          });
+          return {
+            action,
+            proposalId: input.proposalId,
+            voterId,
+            vote: input.vote,
+            engine: 'enabled',
+            transport: hiveConsensusRuntime.status().transport,
+          };
+        } catch (err) {
+          return { action, error: `consensus engine vote failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      }
 
       if (action === 'propose') {
         const proposalId = `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -863,13 +1015,14 @@ export const hiveMindTools: MCPTool[] = [
       if (input.fromId) { const v = validateIdentifier(input.fromId as string, 'fromId'); if (!v.valid) return { success: false, error: v.error }; }
 
       const messageId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const priority = (input.priority as 'low' | 'normal' | 'high' | 'critical') || 'normal';
 
-      // Store in shared memory
+      // Store in shared memory (always — this is the durable record).
       const messages = (state.sharedMemory.broadcasts as Array<unknown>) || [];
       messages.push({
         messageId,
         message: input.message,
-        priority: input.priority || 'normal',
+        priority,
         fromId: input.fromId || 'system',
         timestamp: new Date().toISOString(),
       });
@@ -878,12 +1031,36 @@ export const hiveMindTools: MCPTool[] = [
       state.sharedMemory.broadcasts = messages.slice(-100);
       saveHiveState(state);
 
+      // ADR-095 G2.2 — when the consensus runtime is up, also push the
+      // broadcast over its transport so cross-process / cross-host
+      // peers actually receive it. Local-only runtimes still benefit
+      // (in-process peers get a real handler invocation).
+      let transportDelivered: number | undefined;
+      let transportKind: 'local' | 'federation' | undefined;
+      let transportError: string | undefined;
+      if (hiveConsensusRuntime.isInitialized()) {
+        try {
+          const res = await hiveConsensusRuntime.broadcast(
+            { messageId, message: input.message, fromId: input.fromId || 'system' },
+            priority,
+          );
+          transportDelivered = res.delivered;
+          transportKind = res.transport;
+        } catch (err) {
+          transportError = err instanceof Error ? err.message : String(err);
+        }
+      }
+
       return {
         success: true,
         messageId,
         recipients: state.workers.length,
-        priority: input.priority || 'normal',
+        priority,
         broadcastAt: new Date().toISOString(),
+        transport: transportKind
+          ? { kind: transportKind, delivered: transportDelivered }
+          : { kind: 'state-machine-only', note: 'runtime offline — broadcast persisted to sharedMemory only' },
+        ...(transportError ? { transportError } : {}),
       };
     },
   },
@@ -941,6 +1118,17 @@ export const hiveMindTools: MCPTool[] = [
       state.sharedMemory = {};
       saveHiveState(state);
 
+      // ADR-095 G2.2 — tear down the consensus runtime alongside the
+      // file-state. Best-effort: a runtime that's already offline is
+      // not an error.
+      let runtimeShutdown = false;
+      try {
+        if (hiveConsensusRuntime.isInitialized()) {
+          await hiveConsensusRuntime.shutdown();
+          runtimeShutdown = true;
+        }
+      } catch { /* best-effort */ }
+
       return {
         success: true,
         shutdownAt: shutdownTime,
@@ -948,6 +1136,7 @@ export const hiveMindTools: MCPTool[] = [
         workersTerminated: workerCount,
         previousQueen,
         consensusCleared: pendingConsensus,
+        runtimeShutdown,
         message: `Hive-mind shutdown complete. ${workerCount} workers terminated.`,
       };
     },

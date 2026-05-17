@@ -390,13 +390,20 @@ jobs:
     # (missing dep, source-only checkout) and exit 1 strictly for real
     # failures (signature invalid, dist file regressed). This smoke
     # drives both shapes through and asserts the contract holds:
+    #   - @noble/ed25519 stays declared at the repo root (Case 0, #2027)
     #   - missing @noble/ed25519     → exit 2 + named in the error
     #   - all-manifest-files missing → exit 2 + precondition tag
     #   - built tree                 → exit is NEVER 2
     #
+    # Case 0 (#2027) is the silent-drop guard: if a future dep-cleanup
+    # PR removes @noble/ed25519 from root package.json, `npm ci` on the
+    # scheduled runner will silently stop installing it and the runner
+    # will start re-filing the precondition-miss issue every 12h. The
+    # PR is now blocked at this CI gate before that can happen.
+    #
     # Independent job so a precondition contract break is named clearly
     # in the CI summary. Wired into witness-verify's `needs:` below.
-    name: witness verify precondition smoke (#1880)
+    name: witness verify precondition smoke (#1880, #2027)
     runs-on: ubuntu-latest
 
     steps:
@@ -414,6 +421,51 @@ jobs:
       - name: Drive precondition + built-tree shapes through verify.mjs
         shell: bash
         run: node scripts/smoke-witness-verify-precondition.mjs
+
+  hive-consensus-engine-smoke:
+    # ADR-095 G2.2 regression guard — asserts the hive-mind MCP layer wires
+    # the real `@claude-flow/swarm` ConsensusEngine via hive-consensus-runtime.
+    #
+    # Before this wire-up, `hive-mind_init` was a JSON file write and
+    # `hive-mind_consensus` was a hand-rolled state machine — the real
+    # `ConsensusEngine` (Raft/PBFT/Gossip + pluggable transport) shipped in
+    # @claude-flow/swarm but was never reached from the CLI. This smoke
+    # drives `hive-mind_init` → `hive-mind_consensus { action: 'engine-stats' }`
+    # → `hive-mind_consensus { action: 'propose', useEngine: true }` → shutdown
+    # through the actual MCP tool handlers and asserts each step actually
+    # routes through the engine (`runtime.engine === 'enabled'`,
+    # `transport === 'local'`, `propose.engine === 'enabled'`,
+    # `shutdown.runtimeShutdown === true`).
+    #
+    # If a future refactor accidentally unhooks the runtime — e.g. by
+    # short-circuiting `hive-mind_init` to skip `hiveConsensusRuntime.init`,
+    # or by dropping the `useEngine` proxy from `hive-mind_consensus` — this
+    # job catches it before merge.
+    name: hive-mind consensus engine wire-up smoke (#1872, ADR-095 G2.2)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install root + workspace deps
+        run: npm ci --legacy-peer-deps
+
+      - name: Build @claude-flow/swarm
+        working-directory: v3/@claude-flow/swarm
+        run: npx tsc --build --force
+
+      - name: Build @claude-flow/cli
+        working-directory: v3/@claude-flow/cli
+        run: npm run build
+
+      - name: Drive hive-mind MCP handlers through the real ConsensusEngine
+        shell: bash
+        run: node scripts/smoke-hive-consensus-engine.mjs
 
   pre-bash-hook-smoke:
     # Regression guard for ruvnet/ruflo#2017 — the `pre-bash` PreToolUse hook
