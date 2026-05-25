@@ -102,6 +102,76 @@ export function registerKnowledgeGraphAdapter(
   return adapter;
 }
 
+// ============================================================================
+// ADR-130 Phase 4 — GraphEdgesSource: default source reading from graph_edges
+// ============================================================================
+
+/**
+ * Default KnowledgeGraphSource implementation that reads live edges from the
+ * AgentDB sql.js `graph_edges` table (ADR-130 Phase 4).
+ *
+ * Used when `autoRegister: true` in a plugin's `graph_adapter` declaration.
+ * Falls back to an empty edge list when the table is unavailable.
+ */
+export class GraphEdgesSource implements KnowledgeGraphSource {
+  private readonly relationsFilter: readonly string[] | undefined;
+
+  constructor(options?: { relationsFilter?: string[] }) {
+    this.relationsFilter = options?.relationsFilter;
+  }
+
+  async listEdges(): Promise<readonly KGEdge[]> {
+    try {
+      // Lazy import to avoid hard-coupling the plugin to @claude-flow/cli
+      const { queryEdgesBySource } = await import(
+        // The cli package is the canonical home for graph-edge-writer
+        '@claude-flow/cli/src/memory/graph-edge-writer.js'
+      ).catch(() => import('../../../../../v3/@claude-flow/cli/dist/src/memory/graph-edge-writer.js'));
+
+      // Load all edges (no source filter — we want the full graph)
+      const { getBridgeDb } = await (import('@claude-flow/cli/src/memory/graph-edge-writer.js')
+        .catch(() => import('../../../../../v3/@claude-flow/cli/dist/src/memory/graph-edge-writer.js')));
+
+      const db = await getBridgeDb();
+      if (!db) return [];
+
+      const relClauses = this.relationsFilter?.length
+        ? `WHERE relation IN (${this.relationsFilter.map(r => `'${r.replace(/'/g, "''")}'`).join(',')})`
+        : '';
+
+      const result = db.exec(
+        `SELECT source_id, target_id, relation, weight FROM graph_edges ${relClauses} LIMIT 100000`,
+      );
+      const rows = result?.[0]?.values ?? [];
+      return rows.map((r: unknown[]) => ({
+        fromEntity: r[0] as string,
+        toEntity: r[1] as string,
+        relation: r[2] as string,
+        confidence: typeof r[3] === 'number' ? r[3] : 1.0,
+      }));
+    } catch {
+      return []; // fallback to empty (backward compat)
+    }
+  }
+}
+
+/**
+ * Create a KnowledgeGraphAdapter backed by graph_edges (ADR-130 §Phase 4).
+ * This is the "autoRegister" path: no manual SublinearAdapter implementation needed.
+ */
+export function createAutoGraphAdapter(options?: {
+  relationsFilter?: string[];
+  ddSafetyMargin?: number;
+  registry?: AdapterRegistry;
+}): KnowledgeGraphAdapter {
+  const source = new GraphEdgesSource({ relationsFilter: options?.relationsFilter });
+  return registerKnowledgeGraphAdapter({
+    source,
+    ddSafetyMargin: options?.ddSafetyMargin,
+    registry: options?.registry,
+  });
+}
+
 function hashContent(graphId: string, entries: readonly SparseEntry[]): string {
   const h = createHash('sha256');
   h.update(graphId);
