@@ -1169,7 +1169,7 @@ function simplePersonalizedPageRank(
 
 export const agentdbGraphPathfinder: MCPTool = {
   name: 'agentdb_graph-pathfinder',
-  description: 'Multi-algorithm native graph pathfinder (ADR-130 Phase 5). Replaces the prompt-level loop in ruflo-knowledge-graph graph-navigator. Supports personalized-pagerank, dynamic-mincut, spectral-sparsify, temporal-centrality, connected-component-churn, and witness-chain-divergence algorithms, each with formal complexityBudget enforcement.',
+  description: 'Multi-algorithm native graph pathfinder (ADR-130 Phase 5). Use when agentdb_graph-query k-hop is not enough — pathfinder supports personalized-pagerank, dynamic-mincut, spectral-sparsify, temporal-centrality, connected-component-churn, and witness-chain-divergence. Prefer over prompt-level graph loops in ruflo-knowledge-graph graph-navigator when you need ranked paths with formal complexityBudget enforcement.',
   inputSchema: {
     type: 'object',
     properties: {

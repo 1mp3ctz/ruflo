@@ -122,17 +122,20 @@ export class GraphEdgesSource implements KnowledgeGraphSource {
 
   async listEdges(): Promise<readonly KGEdge[]> {
     try {
-      // Lazy import to avoid hard-coupling the plugin to @claude-flow/cli
-      const { queryEdgesBySource } = await import(
-        // The cli package is the canonical home for graph-edge-writer
-        '@claude-flow/cli/src/memory/graph-edge-writer.js'
-      ).catch(() => import('../../../../../v3/@claude-flow/cli/dist/src/memory/graph-edge-writer.js'));
+      // Lazy import to avoid hard-coupling the plugin to @claude-flow/cli at compile time.
+      // The import paths are resolved at runtime only; TypeScript cannot type-check them
+      // from this plugin's compilation context (no package-level dependency on @claude-flow/cli).
+      type GraphEdgeWriterModule = {
+        getBridgeDb: (dbPath?: string) => Promise<{ exec: (sql: string) => Array<{ values?: unknown[][] }> } | null>;
+      };
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore — dynamic cross-package import resolved at runtime
+      const mod: GraphEdgeWriterModule = await import('@claude-flow/cli/src/memory/graph-edge-writer.js')
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore — fallback to local dist path in mono-repo context
+        .catch(() => import('../../../../../v3/@claude-flow/cli/dist/src/memory/graph-edge-writer.js'));
 
-      // Load all edges (no source filter — we want the full graph)
-      const { getBridgeDb } = await (import('@claude-flow/cli/src/memory/graph-edge-writer.js')
-        .catch(() => import('../../../../../v3/@claude-flow/cli/dist/src/memory/graph-edge-writer.js')));
-
-      const db = await getBridgeDb();
+      const db = await mod.getBridgeDb();
       if (!db) return [];
 
       const relClauses = this.relationsFilter?.length
@@ -143,7 +146,7 @@ export class GraphEdgesSource implements KnowledgeGraphSource {
         `SELECT source_id, target_id, relation, weight FROM graph_edges ${relClauses} LIMIT 100000`,
       );
       const rows = result?.[0]?.values ?? [];
-      return rows.map((r: unknown[]) => ({
+      return (rows as unknown[][]).map((r: unknown[]) => ({
         fromEntity: r[0] as string,
         toEntity: r[1] as string,
         relation: r[2] as string,

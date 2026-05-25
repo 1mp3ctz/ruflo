@@ -1927,14 +1927,22 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: v3/pnpm-lock.yaml
       - name: Install dependencies
-        run: npm ci --workspace=v3/@claude-flow/cli
+        working-directory: v3
+        run: pnpm install --frozen-lockfile
       - name: Build CLI
-        run: npm run build --workspace=v3/@claude-flow/cli
+        working-directory: v3/@claude-flow/cli
+        run: pnpm run build
       - name: Run graph schema smoke
         run: node scripts/smoke-graph-schema-migration.mjs
 
@@ -1946,14 +1954,22 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: v3/pnpm-lock.yaml
       - name: Install dependencies
-        run: npm ci --workspace=v3/@claude-flow/cli
+        working-directory: v3
+        run: pnpm install --frozen-lockfile
       - name: Build CLI
-        run: npm run build --workspace=v3/@claude-flow/cli
+        working-directory: v3/@claude-flow/cli
+        run: pnpm run build
       - name: Run graph query dispatch smoke
         run: node scripts/smoke-graph-query-dispatch.mjs
       - name: Run graph pathfinder smoke
@@ -1967,14 +1983,22 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: v3/pnpm-lock.yaml
       - name: Install dependencies
-        run: npm ci --workspace=v3/@claude-flow/cli
+        working-directory: v3
+        run: pnpm install --frozen-lockfile
       - name: Build CLI
-        run: npm run build --workspace=v3/@claude-flow/cli
+        working-directory: v3/@claude-flow/cli
+        run: pnpm run build
       - name: Run trajectory graph edges smoke
         run: node scripts/smoke-trajectory-graph-edges.mjs
 
@@ -1986,14 +2010,22 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: v3/pnpm-lock.yaml
       - name: Install dependencies
-        run: npm ci --workspace=v3/@claude-flow/cli
+        working-directory: v3
+        run: pnpm install --frozen-lockfile
       - name: Build CLI
-        run: npm run build --workspace=v3/@claude-flow/cli
+        working-directory: v3/@claude-flow/cli
+        run: pnpm run build
       - name: Run graph plugin adapter smoke
         run: node scripts/smoke-graph-plugin-adapter.mjs
 
@@ -2005,13 +2037,21 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: v3/pnpm-lock.yaml
       - name: Install dependencies
-        run: npm ci --workspace=v3/@claude-flow/cli
+        working-directory: v3
+        run: pnpm install --frozen-lockfile
       - name: Build CLI
-        run: npm run build --workspace=v3/@claude-flow/cli
+        working-directory: v3/@claude-flow/cli
+        run: pnpm run build
       - name: Run graph benchmark
         run: node scripts/benchmark-graph.mjs
