@@ -62,8 +62,8 @@ Full command reference: [`USERGUIDE.md`](USERGUIDE.md).
 |---|---|---|
 | MCP tools | **323** | `verification/inventory.json` + quality-sweep audit 2026-05-25 |
 | CLI commands (top-level) | **45** | quality-sweep audit 2026-05-25 (commands/index.ts) |
-| Plugins (`plugins/ruflo-*`) | **32** | same |
-| Agent definitions | **43** | same |
+| Plugins (`plugins/ruflo-*`) | **33** | quality-sweep audit 2026-05-25 (33 dirs with .claude-plugin/plugin.json) |
+| Agent definitions | **45** | quality-sweep audit 2026-05-25 (plugins/*/agents/*.md count) |
 
 ### Recently shipped (since `ruflo@3.6.24` published)
 
