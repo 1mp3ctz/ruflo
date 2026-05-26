@@ -92,6 +92,13 @@ on:
       - 'v3/@claude-flow/cli/src/memory/memory-initializer.ts'
       - 'v3/@claude-flow/cli/src/commands/status.ts'
       - 'scripts/smoke-memory-stats-legacy-db.mjs'
+      # ADR-125 Phase 7 — no stray DB artifacts after `npm test` in
+      # @claude-flow/memory. vitest.setup.ts must wipe *.db / *.rvf /
+      # *.redb files written by agentdb / @ruvector/rvf bindings.
+      - 'v3/@claude-flow/memory/vitest.setup.ts'
+      - 'v3/@claude-flow/memory/vitest.config.ts'
+      - 'v3/@claude-flow/memory/vitest.config.mts'
+      - 'scripts/smoke-memory-no-stray-db.mjs'
       # GitHub skills/agents/helpers surface (#2089, ADR-127) — injection
       # smoke + actions pin smoke gate every change to the .github surface.
       - '.claude/agents/github/**'
@@ -197,6 +204,11 @@ on:
       - 'v3/@claude-flow/cli/src/memory/memory-initializer.ts'
       - 'v3/@claude-flow/cli/src/commands/status.ts'
       - 'scripts/smoke-memory-stats-legacy-db.mjs'
+      # ADR-125 Phase 7 — no stray DB artifacts after npm test
+      - 'v3/@claude-flow/memory/vitest.setup.ts'
+      - 'v3/@claude-flow/memory/vitest.config.ts'
+      - 'v3/@claude-flow/memory/vitest.config.mts'
+      - 'scripts/smoke-memory-no-stray-db.mjs'
       # GitHub skills/agents/helpers surface (#2089, ADR-127)
       - '.claude/agents/github/**'
       - '.claude/skills/github-*/**'
@@ -1138,6 +1150,36 @@ jobs:
 
       - name: Run memory stats legacy-DB smoke
         run: node scripts/smoke-memory-stats-legacy-db.mjs
+
+  memory-no-stray-db-smoke:
+    # Regression guard for ADR-125 Phase 7 — vitest.setup.ts in
+    # @claude-flow/memory must wipe any *.db / *.db-journal / *.db-wal /
+    # *.rvf / *.redb files written by agentdb / @ruvector/rvf native
+    # bindings during the test run. This smoke:
+    #   1. records `git status --porcelain` baseline in v3/@claude-flow/memory
+    #   2. runs `npm test` inside that package
+    #   3. asserts no net-new DB-like artifacts appeared after the run
+    # A failure here means vitest.setup.ts stopped cleaning up, or a new
+    # binding started writing to a path not covered by LEAK_SUFFIXES.
+    name: memory no-stray-db smoke (ADR-125 P7)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install @claude-flow/memory deps
+        # @claude-flow/memory has no workspace:* deps — plain npm install works.
+        working-directory: v3/@claude-flow/memory
+        run: npm install --legacy-peer-deps --no-audit --no-fund --ignore-scripts
+
+      - name: Run memory no-stray-db smoke
+        run: node scripts/smoke-memory-no-stray-db.mjs
 
   github-safe-injection-smoke:
     # Regression guard for ruvnet/ruflo#2089 — ADR-127 Phase 1.
