@@ -109,8 +109,16 @@ Question: ${task.prompt}`;
 function extractAnswer(text: string): string {
   const m = text.match(/<answer>([\s\S]*?)<\/answer>/i);
   if (m && m[1] !== undefined) return m[1].trim();
+  // Fallback: take last non-empty line. Strip leading markdown bullets/quotes/heading marks
+  // and trailing sentence-ending punctuation. Models sometimes give the bare answer on the
+  // final line without the <answer> tags, often prefixed with "- " or "* " from a list.
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  return (lines[lines.length - 1] || '').replace(/[.,!?]$/, '').trim();
+  const last = lines[lines.length - 1] || '';
+  return last
+    .replace(/^[-*>#\s]+/, '')      // leading bullet / quote / heading
+    .replace(/^\*\*|\*\*$/g, '')    // bold markers
+    .replace(/[.,!?]+$/, '')        // trailing punctuation
+    .trim();
 }
 
 function check(answer: string, task: Task): boolean {

@@ -1,5 +1,5 @@
 {
-  "version": "1.1",
+  "version": "1.3",
   "description": "Text-only agent capability benchmark — verifiable multi-step reasoning tasks scoreable without tool use. Format inspired by GAIA / SWE-bench / GSM8K. The fixture mixes EASY (regression-floor) and HARD (model-gradient) questions so the pass rate has signal across Haiku → Sonnet → Opus. Real GAIA (web browsing, attachments, HF dataset) remains future work.",
   "answerFormat": "Each question requires the model to reply with the answer wrapped in <answer>...</answer> tags. The harness extracts the tag contents and checks against `expected` per `matchMode`. Per-task `maxTokens` overrides the default cap.",
   "tasks": [
@@ -66,6 +66,78 @@
       "expected": "14/45",
       "matchMode": "exact",
       "maxTokens": 256
+    },
+    {
+      "id": "expert-marble-inverse",
+      "category": "expert:inverse-arithmetic",
+      "prompt": "A bag of marbles is split as follows: 40% are given to Alice, then 25% of the REMAINING marbles are given to Bob, then half of the remaining marbles (after Alice and Bob) are given to Carol. Carol receives exactly 18 marbles. How many marbles were in the bag originally? Answer with the integer.",
+      "expected": "80",
+      "matchMode": "exact",
+      "maxTokens": 512
+    },
+    {
+      "id": "expert-crt",
+      "category": "expert:number-theory",
+      "prompt": "Find the smallest positive integer n such that all three of these hold simultaneously: n mod 7 = 3, n mod 9 = 4, n mod 11 = 5. Answer with just the integer.",
+      "expected": "346",
+      "matchMode": "exact",
+      "maxTokens": 768
+    },
+    {
+      "id": "expert-bayes",
+      "category": "expert:bayesian",
+      "prompt": "A medical test has 95% sensitivity (true positive rate) and 90% specificity (true negative rate). In the screened population, 1% of people have the disease. A patient tests positive. What is the probability the patient actually has the disease, rounded to the nearest whole percent? Answer with just the integer percentage (no '%' sign).",
+      "expected": "9",
+      "matchMode": "exact",
+      "maxTokens": 512
+    },
+    {
+      "id": "expert-banana",
+      "category": "expert:combinatorics",
+      "prompt": "In how many distinct arrangements of the letters of the word BANANA do no two N's appear next to each other? Answer with the integer.",
+      "expected": "40",
+      "matchMode": "exact",
+      "maxTokens": 512
+    },
+    {
+      "id": "expert-rectangle",
+      "category": "expert:diophantine",
+      "prompt": "A rectangle has positive integer side lengths. Its perimeter (in linear units) is numerically equal to its area (in square units). Two rectangles that are rotations of each other (e.g. 3x6 and 6x3) count as the same rectangle. What is the sum of the areas of all distinct such rectangles? Answer with the integer.",
+      "expected": "34",
+      "matchMode": "exact",
+      "maxTokens": 512
+    },
+    {
+      "id": "expert-dice-reroll",
+      "category": "expert:expected-value",
+      "prompt": "You roll a fair 6-sided die. If the result is a 6, you reroll exactly once and take the new result. Otherwise, you keep the original result. What is the expected value of your final number? Express the answer as a fraction in lowest terms in the form a/b (no spaces, no surrounding text).",
+      "expected": "37/12",
+      "matchMode": "exact",
+      "maxTokens": 512
+    },
+    {
+      "id": "sonnet-killer-knights",
+      "category": "sonnet-killer:logic-puzzle",
+      "prompt": "On an island, knights always tell the truth and knaves always lie. You meet four people named Alice, Bob, Carol, and Dan. They make the following statements: Alice says 'Bob and Carol are different types (one is a knight, the other is a knave).' Bob says 'Alice is a knave.' Carol says 'Dan is a knave.' Dan says 'Carol is a knave.' How many knaves are among the four people? Answer with just the integer.",
+      "expected": "2",
+      "matchMode": "exact",
+      "maxTokens": 768
+    },
+    {
+      "id": "sonnet-killer-hofstadter",
+      "category": "sonnet-killer:recursive-sequence",
+      "prompt": "A sequence is defined on the positive integers by f(1) = 1 and, for every n > 1, f(n) = f(n - f(n-1)) + 1. Compute f(10). Answer with just the integer.",
+      "expected": "4",
+      "matchMode": "exact",
+      "maxTokens": 768
+    },
+    {
+      "id": "sonnet-killer-modexp",
+      "category": "sonnet-killer:number-theory",
+      "prompt": "What are the last two digits of 7 raised to the 2026th power? Answer with exactly the two-digit number (e.g. '07' if it's seven, '49' if it's forty-nine).",
+      "expected": "49",
+      "matchMode": "exact",
+      "maxTokens": 512
     }
   ]
 }
