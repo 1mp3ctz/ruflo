@@ -217,8 +217,8 @@ async function fetchJson(url: string, token: string): Promise<unknown> {
  * Uses the HF Datasets Server API (paginated parquet/JSON rows endpoint).
  * Caches the result locally so subsequent runs are instant.
  *
- * NOTE: This is a PR-1 skeleton — the actual pagination loop is a TODO
- * tracked in ADR-133-PR1. For now it fetches the first 100 rows.
+ * Uses per-level HF configs (2023_level1, 2023_level2, 2023_level3) so
+ * all questions for a given level fit within the 100-row API limit.
  */
 async function downloadGaiaLevel(
   level: GaiaLevel,
@@ -237,11 +237,15 @@ async function downloadGaiaLevel(
     return cached;
   }
 
-  // HF Datasets Server rows endpoint for the 2023 config validation split
-  // Config "2023_all" contains all levels; we filter by level client-side.
+  // HF Datasets Server rows endpoint for the per-level 2023 config.
+  // Using "2023_level{N}" config instead of "2023_all" avoids the pagination
+  // problem: "2023_all" has 165 rows but the API caps at 100 per request,
+  // which silently drops 23 of 53 Level-1 questions. The per-level configs
+  // each have ≤100 rows (L1=53, L2=86, L3=26) and fit in a single request.
+  const levelConfig = `2023_level${level}`;
   const url =
     `${HF_DATASETS_API}/rows?dataset=${encodeURIComponent(HF_DATASET_REPO)}` +
-    `&config=2023_all&split=validation&offset=0&length=100`;
+    `&config=${levelConfig}&split=validation&offset=0&length=100`;
 
   const data = await fetchJson(url, token) as { rows: Array<{ row: Record<string, unknown> }> };
 
