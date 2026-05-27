@@ -1,7 +1,7 @@
 ---
 name: gaia-run
 description: Execute a GAIA benchmark run — shells out to gaia-bench run, streams progress, and writes JSON results
-argument-hint: "[--level=1] [--limit=53] [--models=haiku,sonnet] [--concurrency=3] [--voting=1] [--hardness-routing]"
+argument-hint: "[--level=1] [--limit=53] [--models=haiku,sonnet] [--concurrency=3] [--voting-attempts=1] [--hardness-routing] [--enable-critic] [--decompose] [--planning-interval=4]"
 ---
 
 # /gaia run
@@ -13,8 +13,11 @@ Run GAIA benchmark questions through the ruflo agent loop.
 ```
 /gaia run
 /gaia run --level=1 --limit=53 --models=claude-sonnet-4-6
-/gaia run --level=1 --limit=53 --models=haiku,sonnet --voting=3 --hardness-routing
+/gaia run --level=1 --limit=53 --models=haiku,sonnet --voting-attempts=3 --hardness-routing
 /gaia run --smoke-only   # 5 questions, no HF token needed
+
+# Recommended config (~$2/run, all active tracks):
+/gaia run --level=1 --models=claude-sonnet-4-6 --hardness-routing --enable-critic --planning-interval=4
 ```
 
 ## Options
@@ -25,12 +28,23 @@ Run GAIA benchmark questions through the ruflo agent loop.
 | `--limit` | all | Maximum questions to run |
 | `--models` | `claude-haiku-4-5` | Comma-separated model IDs |
 | `--concurrency` | `3` | Parallel question slots |
-| `--voting` | `1` | Self-consistency attempts (Track A; 3 recommended for L2/L3) |
-| `--hardness-routing` | off | Track Q: route each question to appropriate model/turn budget |
+| `--voting-attempts` | `1` | Track A: self-consistency attempts (3 recommended, +5-10pp; voting takes precedence over critic when both set) |
+| `--hardness-routing` | off | Track Q: route each question to appropriate model/turn budget (overrides --max-turns and --voting-attempts per question) |
+| `--hardness-verbose` | off | Track Q: log predicted difficulty per question |
+| `--enable-critic` | off | Track D: adversarial critic reviews answer before submission (+3-5pp; skipped when voting-attempts > 1) |
+| `--decompose` | off | Track E: decompose multi-step questions into sub-questions (+5-10pp on ~30-40% of L1 set) |
+| `--planning-interval` | `4` | Track B: inject planning checkpoint every N turns (0=disable; based on smolagents finding) |
 | `--max-turns` | `12` | Max agent turns per question (overridden by hardness router) |
 | `--judge-model` | `claude-sonnet-4-6` | Model used for LLM-as-judge scoring |
 | `--smoke-only` | off | Use 5-question fixture (CI / no HF token) |
 | `--output` | `text` | `text` or `json` |
+
+## Flag precedence
+
+When multiple flags combine:
+1. `--hardness-routing` overrides `--max-turns` and `--voting-attempts` per question.
+2. `--voting-attempts > 1` takes precedence over `--enable-critic` (cost containment — voting + critic would cost voting-count × critic calls per question).
+3. `--decompose` works independently; each sub-question runs through voting/critic/plain independently, then sub-answers are synthesized before judging.
 
 ## What this does
 
