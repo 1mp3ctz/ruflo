@@ -1379,7 +1379,9 @@ jobs:
         shell: bash
         run: |
           pnpm install --frozen-lockfile
-          pnpm --filter @claude-flow/cli run build
+          # Build all workspace deps first — cli depends on cli-core, memory, etc.
+          # Match the proven cli-npx-install-smoke pattern (recursive + no-bail).
+          pnpm --recursive --no-bail run build || true
           test -f @claude-flow/cli/bin/cli.js \
             || (echo "cli build did not produce bin/cli.js"; exit 1)
 
