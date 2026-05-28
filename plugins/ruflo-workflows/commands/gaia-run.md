@@ -1,7 +1,7 @@
 ---
 name: gaia-run
 description: Execute a GAIA benchmark run — shells out to gaia-bench run, streams progress, and writes JSON results
-argument-hint: "[--level=1] [--limit=53] [--models=haiku,sonnet] [--concurrency=3] [--voting-attempts=1] [--hardness-routing] [--enable-critic] [--decompose] [--planning-interval=4] [--mode=toolcalling|codeagent]"
+argument-hint: "[--level=1] [--limit=53] [--models=haiku,sonnet] [--concurrency=3] [--voting-attempts=1] [--hardness-routing] [--enable-critic] [--decompose] [--planning-interval=4] [--mode=toolcalling|codeagent|hybrid]"
 ---
 
 # /gaia run
@@ -21,6 +21,9 @@ Run GAIA benchmark questions through the ruflo agent loop.
 
 # ADR-138 iter 54 — CodeAgent mode (smolagents-style Python code blocks):
 /gaia run --level=1 --models=claude-sonnet-4-6 --mode=codeagent
+
+# iter 58 — hybrid routing (per-question dispatch to ToolCalling or CodeAgent):
+/gaia run --level=1 --models=claude-sonnet-4-6 --mode=hybrid
 ```
 
 ## Options
@@ -37,7 +40,7 @@ Run GAIA benchmark questions through the ruflo agent loop.
 | `--enable-critic` | off | Track D: adversarial critic reviews answer before submission (+3-5pp; skipped when voting-attempts > 1) |
 | `--decompose` | off | Track E: decompose multi-step questions into sub-questions (+5-10pp on ~30-40% of L1 set) |
 | `--planning-interval` | `4` | Track B: inject planning checkpoint every N turns (0=disable; based on smolagents finding) |
-| `--mode` | `toolcalling` | Agent mode: `toolcalling` (default, JSON tool_use) or `codeagent` (ADR-138 iter 54 — Python code blocks, targets HAL accuracy) |
+| `--mode` | `toolcalling` | Agent mode: `toolcalling` (default, JSON tool_use), `codeagent` (ADR-138 iter 54 — Python code blocks), or `hybrid` (iter 58 — per-question routing: attachment/retrieval→ToolCalling, reasoning/calc→CodeAgent) |
 | `--max-turns` | `12` | Max agent turns per question (overridden by hardness router) |
 | `--judge-model` | `claude-sonnet-4-6` | Model used for LLM-as-judge scoring |
 | `--smoke-only` | off | Use 5-question fixture (CI / no HF token) |

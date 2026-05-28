@@ -84,6 +84,10 @@ interface QuestionResult {
   hardnessConfidence?: number;
   /** ADR-135 Track E: set to true when the question was decomposed. */
   decomposed?: boolean;
+  /** iter 58 hybrid routing: which mode was chosen (ToolCalling|CodeAgent). */
+  routedMode?: string;
+  /** iter 58 hybrid routing: which routing rule fired. */
+  routedRule?: string;
 }
 
 interface HardnessDist {
@@ -207,7 +211,7 @@ const runCommand: Command = {
     {
       name: 'mode',
       type: 'string',
-      description: 'Agent mode: "toolcalling" (default, ADR-133 JSON tool_use) or "codeagent" (ADR-138 iter 54 — smolagents-style Python code blocks).',
+      description: 'Agent mode: "toolcalling" (default, ADR-133 JSON tool_use), "codeagent" (ADR-138 iter 54), or "hybrid" (iter 58 — per-question routing: attachment/retrieval→ToolCalling, reasoning/calc→CodeAgent).',
       default: 'toolcalling',
     },
   ],
@@ -248,6 +252,10 @@ const runCommand: Command = {
       command: 'claude-flow gaia-bench run --level 1 --models claude-sonnet-4-6 --mode codeagent',
       description: 'ADR-138 iter 54: CodeAgent (smolagents-style Python code blocks) — targets HAL-level accuracy',
     },
+    {
+      command: 'claude-flow gaia-bench run --level 1 --models claude-sonnet-4-6 --mode hybrid',
+      description: 'iter 58: hybrid routing — per-question dispatch: attachment/retrieval→ToolCalling, reasoning/calc→CodeAgent',
+    },
   ],
   action: async (ctx: CommandContext): Promise<CommandResult> => {
     const level = parseInt(String(ctx.flags.level ?? '1'), 10) as 1 | 2 | 3;
@@ -281,11 +289,13 @@ const runCommand: Command = {
     const enableDecompose = ctx.flags['decompose'] === true || ctx.flags['decompose'] === 'true';
     // ADR-135 Track B: planning interval (passed through to runGaiaAgent via agentOpts).
     const planningInterval = parseInt(String(ctx.flags['planningInterval'] ?? ctx.flags['planning-interval'] ?? '4'), 10);
-    // ADR-138 iter 54: CodeAgent mode.
+    // ADR-138 iter 54: CodeAgent mode. iter 58: hybrid mode.
     const agentModeRaw = String(ctx.flags['mode'] ?? 'toolcalling');
     // 'agent' is a backward-compat alias for 'toolcalling'
     const agentMode = agentModeRaw === 'agent' ? 'toolcalling' : agentModeRaw;
     const useCodeAgent = agentMode === 'codeagent';
+    // iter 58: hybrid mode routes per-question via gaia-mode-router.ts
+    const useHybrid = agentMode === 'hybrid';
 
     // Dynamic imports to avoid loading at startup.
     // NOTE: gaia-*.ts sources are pre-compiled under dist/src/benchmarks/ only --
@@ -296,12 +306,18 @@ const runCommand: Command = {
     const benchmarksBase = new URL('../benchmarks/', import.meta.url).href;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { loadGaia } = (await import(benchmarksBase + 'gaia-loader.js')) as any;
-    // ADR-138 iter 54: CodeAgent — only imported when --mode codeagent.
+    // ADR-138 iter 54: CodeAgent — imported when --mode codeagent OR --mode hybrid.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { runGaiaCodeAgent } = useCodeAgent
+    const { runGaiaCodeAgent } = (useCodeAgent || useHybrid)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ? ((await import(benchmarksBase + 'gaia-codeagent.js')) as any)
       : { runGaiaCodeAgent: null };
+    // iter 58: hybrid mode router — imported when --mode hybrid.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { routeQuestion: hybridRouteQuestion } = useHybrid
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ? ((await import(benchmarksBase + 'gaia-mode-router.js')) as any)
+      : { routeQuestion: null };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { runGaiaAgent } = (await import(benchmarksBase + 'gaia-agent.js')) as any;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -359,7 +375,7 @@ const runCommand: Command = {
     log(output.bold(`GAIA Benchmark -- Level ${level}${smokeOnly ? ' [SMOKE]' : ''}`));
     log(output.dim('-'.repeat(60)));
     log(`Models  : ${models.join(', ')}`);
-    log(`Mode    : ${agentMode}${useCodeAgent ? ' (ADR-138 iter 54 — CodeAgent harness)' : ''}`);
+    log(`Mode    : ${agentMode}${useHybrid ? ' (iter 58 hybrid routing — gaia-mode-router)' : useCodeAgent ? ' (ADR-138 iter 54 — CodeAgent harness)' : ''}`);
     log(`Limit   : ${limit ?? 'all'}`);
     log(`Concurrency: ${concurrency}`);
     if (useVoting && !hardnessRouting) {
@@ -435,8 +451,17 @@ const runCommand: Command = {
             let effectiveVotingAttempts = votingAttempts;
             let predictedDifficulty: string | undefined;
             let predictedConfidence: number | undefined;
+            // iter 58 hybrid routing: per-question mode decision.
+            let hybridMode: string | undefined;
+            let hybridRule: string | undefined;
 
-            if (hardnessRouting && hardnessPredictor) {
+            if (useHybrid && hybridRouteQuestion) {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const decision: any = hybridRouteQuestion(q);
+              hybridMode = decision.mode as string;
+              hybridRule = decision.rule as string;
+              log(`  [${qIdx}/${questions.length}] ${q.task_id} [hybrid:${hybridMode}/${hybridRule}] -- ${String(q.question).slice(0, 45)}...`);
+            } else if (hardnessRouting && hardnessPredictor) {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const prediction: any = hardnessPredictor.predict(q);
               predictedDifficulty = prediction.difficulty as string;
@@ -503,8 +528,12 @@ const runCommand: Command = {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               let agentResult: any;
               try {
-                if (useCodeAgent && runGaiaCodeAgent) {
-                  // ADR-138 iter 54: smolagents-style CodeAgent (Python code blocks, not JSON tool_use).
+                // iter 58: hybrid dispatch — route to CodeAgent or ToolCalling per-question.
+                const routeToCodeAgent = useCodeAgent ||
+                  (useHybrid && hybridMode === 'CodeAgent');
+
+                if (routeToCodeAgent && runGaiaCodeAgent) {
+                  // ADR-138 iter 54 / iter 58 hybrid: smolagents-style CodeAgent.
                   const codeAgentMaxTurns = effectiveMaxTurns === 12 ? 20 : effectiveMaxTurns;
                   agentResult = await runGaiaCodeAgent(sq, {
                     model: effectiveModel,
@@ -554,6 +583,8 @@ const runCommand: Command = {
                 hardnessDifficulty: predictedDifficulty,
                 hardnessConfidence: predictedConfidence,
                 decomposed: decomposedResult?.decomposed === true,
+                routedMode: hybridMode,
+                routedRule: hybridRule,
               } as QuestionResult;
             }
 
@@ -610,6 +641,8 @@ const runCommand: Command = {
               hardnessDifficulty: predictedDifficulty,
               hardnessConfidence: predictedConfidence,
               decomposed: decomposedResult?.decomposed === true,
+              routedMode: hybridMode,
+              routedRule: hybridRule,
             } as QuestionResult;
           }),
         );
