@@ -68,7 +68,9 @@ All ADRs are located in [`/v3/implementation/adrs/`](../../implementation/adrs/)
 
 **Security Score:** 10/10
 
+| ADR-155 | Knowledge Graph Index for ReasoningBank | Proposed | 2026-06-12 | Extends graph-backend.ts (ADR-087) to index ReasoningBank entries as KG nodes/edges; adds hybrid kg_query+HNSW retrieval path to UnifiedMemoryService; feature-flagged |
+
 ---
 
-**Last Updated:** 2026-01-14
-**CLI Version:** @claude-flow/cli@3.0.0-alpha.104
+**Last Updated:** 2026-06-12
+**CLI Version:** @claude-flow/cli@3.6.10
