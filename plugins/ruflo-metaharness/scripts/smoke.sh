@@ -191,6 +191,30 @@ grep -q "execCli(\[\s*'-y'\s*,\s*'metaharness@latest'" "$F" 2>/dev/null || \
 grep -q "cwd: opts" "$F" || miss="$miss no-cwd-passthrough"
 [[ -z "$miss" ]] && ok || bad "$miss"
 
+step "17z54. SKILL.md script references point at existing files (iter 91)"
+miss=""
+# Companion to iter-89/90's cross-reference checks. SKILL.md files
+# embed paths like `scripts/foo.mjs` in their text. If a future iter
+# renames a script, the SKILL.md text rots silently — the doc still
+# renders but the link 404s, and ops users hunting for the
+# implementation hit a dead end.
+SKILLS_DIR="$ROOT/skills"
+SCRIPTS_DIR="$ROOT/scripts"
+# Extract every `scripts/<name>.mjs` reference from every SKILL.md.
+REFS=$(grep -rohE "scripts/[a-z_-]+\.mjs" "$SKILLS_DIR"/*/SKILL.md 2>/dev/null \
+  | sed -E "s|scripts/||" \
+  | sort -u)
+COUNT=0
+for f in $REFS; do
+  COUNT=$((COUNT + 1))
+  [[ -f "$SCRIPTS_DIR/$f" ]] || miss="$miss skill-ref-${f}-missing"
+done
+# At least 5 references expected (one per skill at minimum; some SKILL.md
+# files reference multiple scripts). Lock the floor — if it drops below 5,
+# something was deleted.
+[[ "$COUNT" -ge 5 ]] || miss="$miss skill-ref-count-too-low:$COUNT"
+[[ -z "$miss" ]] && ok || bad "$miss"
+
 step "17z53. MCP-tool runScript() references point at existing scripts (iter 90)"
 miss=""
 # Companion to iter-89's SUBCOMMANDS check. metaharness-tools.ts has 9
