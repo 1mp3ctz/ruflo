@@ -1135,9 +1135,10 @@ npx ruflo metaharness similarity \               # iter 36 — ADR-152 §3.1 wei
   --a a.json --b b.json [--per-dimension] [--alert-below 0.5]
 npx ruflo metaharness drift-from-history \       # iter 53 — 1-command drift (composes 3 primitives)
   [--baseline-since 7d] [--baseline-key <key>] [--baseline-file <path>] \
-  [--threshold 0.95] [--dry-run]
+  [--threshold 0.95] [--alert-on-new-severity high] [--dry-run]
                                                  # iter 66 — --baseline-key skips audit-list (~14x faster)
                                                  # iter 67 — --baseline-file skips memory entirely (~19x faster)
+                                                 # iter 78 — --alert-on-new-severity adds orthogonal finding-severity gate
 npx ruflo metaharness mint --name foo --template vertical:coding --confirm
 
 # Dedicated command

@@ -302,6 +302,7 @@ export const metaharnessTools: MCPTool[] = [
         baselineKey: { type: 'string', description: 'iter 66 — explicit memory key for the baseline audit. Skips audit-list (no ONNX warmup). Get from `metaharness_audit_list` first.' },
         baselineFile: { type: 'string', description: 'iter 67 — file path to a saved oia-audit JSON. Skips audit-list AND memory roundtrip. Ideal for CI artifact pipelines (e.g., comparing this run vs a downloaded prior-run artifact).' },
         threshold: { type: 'number', description: 'Alert when structural similarity < N. Default 0.95.', default: 0.95 },
+        alertOnNewSeverity: { type: 'string', enum: ['info', 'low', 'medium', 'warn', 'high', 'error', 'critical'], description: 'iter 78 — ALSO alert when any introduced finding meets or exceeds this severity. Orthogonal to `threshold`: a CRITICAL finding triggers even if structural similarity > threshold.' },
         dryRun: { type: 'boolean', description: 'Skip persisting the fresh audit to memory', default: false },
       },
     },
@@ -312,6 +313,7 @@ export const metaharnessTools: MCPTool[] = [
       if (input.baselineKey) args.push('--baseline-key', String(input.baselineKey));
       if (input.baselineFile) args.push('--baseline-file', String(input.baselineFile));
       if (input.threshold !== undefined) args.push('--threshold', String(input.threshold));
+      if (input.alertOnNewSeverity) args.push('--alert-on-new-severity', String(input.alertOnNewSeverity));
       if (input.dryRun === true) args.push('--dry-run');
       const r = await runScript('drift-from-history.mjs', args);
       return { success: r.success, data: r.json, degraded: r.degraded, exitCode: r.exitCode };

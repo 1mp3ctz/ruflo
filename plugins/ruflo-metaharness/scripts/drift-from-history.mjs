@@ -33,6 +33,8 @@
 //   3  upstream metaharness absent — degraded payload returned
 
 import { spawnSync, spawn } from 'node:child_process';
+// iter 78 — share the iter-63 SEVERITY_RANK for the new finding-alert gate
+import { rankSeverity } from './_harness.mjs';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -48,6 +50,10 @@ const ARGS = (() => {
   const a = {
     path: '.', baselineSince: null, baselineKey: null, baselineFile: null,
     threshold: 0.95, dryRun: false, format: 'table',
+    // iter 78 — opt-in finding-severity alert gate. Default null (off)
+    // preserves iter-53 behavior; set to a severity name to ALSO alert
+    // when any introduced finding meets or exceeds that severity.
+    alertOnNewSeverity: null,
   };
   for (let i = 2; i < process.argv.length; i++) {
     const v = process.argv[i];
@@ -63,6 +69,8 @@ const ARGS = (() => {
     else if (v === '--threshold') a.threshold = Number(process.argv[++i]);
     else if (v === '--dry-run') a.dryRun = true;
     else if (v === '--format') a.format = process.argv[++i];
+    // iter 78 — orthogonal alert: any new finding ≥ this severity triggers
+    else if (v === '--alert-on-new-severity') a.alertOnNewSeverity = String(process.argv[++i]).toLowerCase();
   }
   return a;
 })();
@@ -270,7 +278,25 @@ async function main() {
       }, 2);
     }
     const trend = trendResult.json;
-    const alertTriggered = trendResult.exitCode === 1;
+    let alertTriggered = trendResult.exitCode === 1;
+    const alertReasons = trend.alert?.reasons ? [...trend.alert.reasons] : [];
+
+    // iter 78 — orthogonal finding-severity gate: any introduced
+    // finding ≥ --alert-on-new-severity triggers regardless of
+    // structural-distance threshold. Catches the "security regression
+    // that didn't move the genome much" case.
+    let elevatedFindings = [];
+    if (ARGS.alertOnNewSeverity) {
+      const threshold = rankSeverity(ARGS.alertOnNewSeverity);
+      const introduced = trend?.delta?.findings?.introduced ?? [];
+      elevatedFindings = introduced.filter((f) => rankSeverity(f.severity) >= threshold);
+      if (elevatedFindings.length > 0) {
+        alertTriggered = true;
+        alertReasons.push(
+          `${elevatedFindings.length} new finding(s) at or above ${ARGS.alertOnNewSeverity} severity`,
+        );
+      }
+    }
 
     const payload = {
       adr: 'ADR-150 + ADR-152 §3.1',
@@ -301,9 +327,16 @@ async function main() {
       drift: trend.delta,
       alert: {
         threshold: ARGS.threshold,
+        // iter 78 — orthogonal gates surfaced: similarity threshold AND
+        // new-finding-severity. Either can flip triggered=true.
+        newSeverityThreshold: ARGS.alertOnNewSeverity,
         triggered: alertTriggered,
-        reason: trend.alert?.reasons?.join('; ')
-          ?? (alertTriggered ? `similarity < ${ARGS.threshold}` : `similarity ≥ ${ARGS.threshold} — OK`),
+        reasons: alertReasons,
+        // Keep .reason for backward-compat with consumers that read it as a string
+        reason: alertReasons.length > 0
+          ? alertReasons.join('; ')
+          : (alertTriggered ? `similarity < ${ARGS.threshold}` : `similarity ≥ ${ARGS.threshold} — OK`),
+        elevatedFindings,
       },
       generatedAt: new Date().toISOString(),
     };

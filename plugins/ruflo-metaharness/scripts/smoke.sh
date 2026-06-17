@@ -191,6 +191,35 @@ grep -q "execCli(\[\s*'-y'\s*,\s*'metaharness@latest'" "$F" 2>/dev/null || \
 grep -q "cwd: opts" "$F" || miss="$miss no-cwd-passthrough"
 [[ -z "$miss" ]] && ok || bad "$miss"
 
+step "17z41. drift-from-history --alert-on-new-severity gate (iter 78)"
+miss=""
+F="$ROOT/scripts/drift-from-history.mjs"
+grep -q -- "--alert-on-new-severity" "$F" 2>/dev/null || miss="$miss no-cli-flag"
+grep -q "alertOnNewSeverity" "$F" 2>/dev/null || miss="$miss no-args-key"
+grep -q "elevatedFindings" "$F" 2>/dev/null || miss="$miss no-elevated-array"
+grep -q "import.*rankSeverity.*from './_harness.mjs'" "$F" 2>/dev/null || miss="$miss no-rank-import"
+# MCP tool input schema includes it
+WRAPPER="$ROOT/../../v3/@claude-flow/cli/src/mcp-tools/metaharness-tools.ts"
+grep -q "alertOnNewSeverity:" "$WRAPPER" 2>/dev/null || miss="$miss no-mcp-input"
+grep -q "args.push('--alert-on-new-severity'" "$WRAPPER" 2>/dev/null || miss="$miss no-mcp-dispatch"
+# CLAUDE.md surfaces the flag
+CMD="$ROOT/../../CLAUDE.md"
+grep -q -- "--alert-on-new-severity" "$CMD" 2>/dev/null || miss="$miss no-claude-md"
+# Runtime end-to-end: --alert-on-new-severity info on real baseline fires
+# (real ruflo audit has 1 INFO finding; baseline file with no findings → introduced=1)
+BC=$(mktemp)
+node "$ROOT/scripts/oia-audit.mjs" --dry-run --format json 2>/dev/null > "$BC"
+python3 -c "
+import json
+d = json.load(open('$BC'))
+d['components']['mcpScan']['json'] = {'findings': []}
+json.dump(d, open('$BC', 'w'))
+" 2>/dev/null
+node "$F" --baseline-file "$BC" --dry-run --threshold 0.5 --alert-on-new-severity info >/dev/null 2>&1
+[[ "$?" == "1" ]] || miss="$miss runtime-alert-did-not-trigger"
+rm -f "$BC"
+[[ -z "$miss" ]] && ok || bad "$miss"
+
 step "17z40. roundtrip Stage 11 — diff symmetry + dedup discrimination (iter 77)"
 miss=""
 F="$ROOT/scripts/test-pipeline-roundtrip.mjs"
