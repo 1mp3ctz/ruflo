@@ -191,6 +191,37 @@ grep -q "execCli(\[\s*'-y'\s*,\s*'metaharness@latest'" "$F" 2>/dev/null || \
 grep -q "cwd: opts" "$F" || miss="$miss no-cwd-passthrough"
 [[ -z "$miss" ]] && ok || bad "$miss"
 
+step "17z55. MCP enum + SEVERITY_RANK vocabulary aligned (iter 92)"
+miss=""
+# Two sources of severity vocabulary:
+#   1. _harness.mjs::SEVERITY_RANK keys
+#   2. metaharness-tools.ts:metaharness_drift_from_history.alertOnNewSeverity.enum
+# If they drift, users see confusing rejection of supposedly-valid severities.
+# Smoke ensures:
+#   - Every MCP enum value is a SEVERITY_RANK key (subset relationship)
+#   - The only SEVERITY_RANK key NOT in the enum is 'clean' (alerting on
+#     'clean' is meaningless — clean=0 ranks below everything)
+HARNESS="$ROOT/scripts/_harness.mjs"
+WRAPPER="$ROOT/../../v3/@claude-flow/cli/src/mcp-tools/metaharness-tools.ts"
+# Extract SEVERITY_RANK keys — only from inside the SEVERITY_RANK literal.
+# Pre-iter-92 regex `^\s+[a-z]+: [0-9]` missed multi-key lines like
+# `clean: 0, info: 0`. Use grep -oE on the whole literal to capture all
+# `<word>: <digit>` pairs regardless of line position.
+RANK_KEYS=$(awk '/SEVERITY_RANK = Object.freeze/,/\}\);/' "$HARNESS" 2>/dev/null \
+  | grep -oE "[a-z]+: [0-9]" | sed -E 's/: [0-9]//' | sort -u)
+# Extract enum entries from metaharness-tools.ts. Pull just the bracket
+# portion to avoid capturing 'string' from `type: 'string'`.
+ENUM=$(grep "alertOnNewSeverity.*enum:" "$WRAPPER" 2>/dev/null \
+  | head -1 | grep -oE "enum: \[[^]]+\]" | grep -oE "'[a-z]+'" | tr -d "'" | sort -u)
+# 1. Every enum value must be in SEVERITY_RANK
+for e in $ENUM; do
+  echo "$RANK_KEYS" | grep -qx "$e" || miss="$miss enum-$e-not-in-rank"
+done
+# 2. SEVERITY_RANK keys minus enum should be exactly {clean}
+MISSING_FROM_ENUM=$(comm -23 <(echo "$RANK_KEYS") <(echo "$ENUM"))
+[[ "$MISSING_FROM_ENUM" == "clean" ]] || miss="$miss enum-missing-keys-mismatch:$(echo $MISSING_FROM_ENUM | tr '\n' ',')"
+[[ -z "$miss" ]] && ok || bad "$miss"
+
 step "17z54. SKILL.md script references point at existing files (iter 91)"
 miss=""
 # Companion to iter-89/90's cross-reference checks. SKILL.md files
