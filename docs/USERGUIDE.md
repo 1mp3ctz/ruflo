@@ -260,12 +260,12 @@ Agents organize into swarms led by queens that coordinate work, prevent drift, a
 | Coordination | Queen, Swarm, Consensus | Manages agent teams (Raft, Byzantine, Gossip) |
 | Drift Control | Hierarchical topology, Checkpoints | Prevents agents from going off-task |
 | Hive Mind | Queen-led hierarchy, Collective memory | Strategic/tactical/adaptive queens coordinate workers |
-| Consensus | Byzantine, Weighted, Majority | Fault-tolerant decisions (2/3 majority for BFT) |
+| Consensus | Byzantine, Raft, Gossip, CRDT, Quorum | Fault-tolerant decisions (2/3 majority for BFT) |
 
 **Hive Mind Capabilities:**
 - 🐝 **Queen Types**: Strategic (planning), Tactical (execution), Adaptive (optimization)
 - 👷 **8 Worker Types**: Researcher, Coder, Analyst, Tester, Architect, Reviewer, Optimizer, Documenter
-- 🗳️ **3 Consensus Algorithms**: Majority, Weighted (Queen 3x), Byzantine (f < n/3)
+- 🗳️ **5 Consensus Algorithms**: Byzantine (f < n/3), Raft (leader-elected), Gossip (eventually consistent), CRDT (conflict-free), Quorum (configurable threshold)
 - 🧠 **Collective Memory**: Shared knowledge, LRU cache, SQLite persistence with WAL
 - ⚡ **Performance**: Fast batch spawning with parallel agent coordination
 
@@ -1689,9 +1689,11 @@ The Hive Mind system implements queen-led hierarchical coordination where strate
 
 | Algorithm | Voting | Fault Tolerance | Best For |
 |-----------|--------|-----------------|----------|
-| **Majority** | Simple democratic | None | Quick decisions |
-| **Weighted** | Queen 3x weight | None | Strategic guidance |
 | **Byzantine** | 2/3 supermajority | f < n/3 faulty | Critical decisions |
+| **Raft** | Leader-elected | f < n/2 faulty | Strongly-consistent state |
+| **Quorum** | Configurable (majority / supermajority / unanimous) | Threshold-dependent | Tunable agreement |
+| **Gossip** | Epidemic | Eventually consistent | Large peer networks |
+| **CRDT** | Conflict-free merge | Partition-tolerant | Distributed shared state |
 
 **Collective Memory Types:**
 - `knowledge` (permanent), `context` (1h TTL), `task` (30min TTL), `result` (permanent)
@@ -2434,7 +2436,8 @@ ruflo ruvector backup --output ./backup.sql
 | **Queen Types** | Strategic, Tactical, Adaptive | Research/planning, execution, optimization |
 | **Worker Types** | 8 specialized agents | researcher, coder, analyst, tester, architect, reviewer, optimizer, documenter |
 | **Byzantine Consensus** | Fault-tolerant agreement | f < n/3 tolerance (2/3 supermajority) |
-| **Weighted Consensus** | Queen 3x voting power | Strategic guidance with democratic input |
+| **Raft Consensus** | Leader-elected agreement | f < n/2 tolerance, strongly-consistent state |
+| **Quorum Consensus** | Configurable voting threshold | Majority / supermajority / unanimous |
 | **Collective Memory** | Shared pattern storage | 8 memory types with TTL, LRU cache, SQLite WAL |
 | **Specialist Spawning** | Domain-specific agents | Security, performance, etc. |
 | **Adaptive Topology** | Dynamic structure changes | Load-based optimization, auto-scaling |

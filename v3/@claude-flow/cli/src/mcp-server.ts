@@ -327,6 +327,30 @@ export class MCPServerManager extends EventEmitter {
     console.info = (...args: unknown[]) => process.stderr.write('[stdout→stderr] ' + args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ') + '\n');
     console.debug = (...args: unknown[]) => process.stderr.write('[stdout→stderr] ' + args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ') + '\n');
 
+    // #2426 — Force blocking writes on stdout so JSON-RPC frames larger than
+    // the OS pipe buffer (64KB on macOS) are delivered atomically. Without
+    // this, `process.stdout.write()` returns after a partial write when the
+    // pipe buffer is full; the truncated frame is unparseable JSON and the
+    // MCP client (Claude Code) silently drops all 314 tools. The MCP SDK's
+    // StdioServerTransport does the same thing for this reason. `setBlocking`
+    // is an internal Node API but stable since v10 and used in many MCP
+    // implementations; we feature-gate it so we degrade gracefully on
+    // exotic stdout handles (e.g., when not bound to a pipe in tests).
+    const stdoutHandle = (process.stdout as unknown as {
+      _handle?: { setBlocking?: (b: boolean) => void };
+    })._handle;
+    if (stdoutHandle && typeof stdoutHandle.setBlocking === 'function') {
+      stdoutHandle.setBlocking(true);
+    }
+    // Same for stderr — long structured error messages can also exceed the
+    // pipe buffer and tearing those mid-message corrupts the client's log view.
+    const stderrHandle = (process.stderr as unknown as {
+      _handle?: { setBlocking?: (b: boolean) => void };
+    })._handle;
+    if (stderrHandle && typeof stderrHandle.setBlocking === 'function') {
+      stderrHandle.setBlocking(true);
+    }
+
     /** Send a single JSON-RPC frame to the real stdout. Use this instead
      * of `console.log` so the hijack above can't redirect protocol frames. */
     const writeFrame = (msg: unknown): void => {

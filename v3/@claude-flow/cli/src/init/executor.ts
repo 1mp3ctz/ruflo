@@ -370,8 +370,13 @@ function mergeSettingsForUpgrade(existing: Record<string, unknown>): Record<stri
   // never gets the fix. Now we detect the broken form and overwrite.
   const NEW_STATUSLINE_CMD =
     `node -e "var c=require('child_process'),p=require('path'),r;try{r=c.execSync('git rev-parse --show-toplevel',{encoding:'utf8'}).trim()}catch(e){r=process.cwd()}var s=p.join(r,'.claude/helpers/statusline.cjs');process.argv.splice(1,0,s);require(s)"`;
-  // Matches: `npx [--prefer-offline] [@]claude-flow/cli@latest hooks statusline …`
-  const BROKEN_STATUSLINE_RE = /npx\s+(?:--?\S+\s+)*@?claude-flow\/cli@latest\s+hooks\s+statusline/;
+  // Matches any invocation of `claude-flow hooks statusline` — either via npx
+  // (`npx [--prefer-offline] [@]claude-flow[/cli][@<tag>] hooks statusline …`)
+  // or as a bare command (`claude-flow hooks statusline …`). Both forms cold-
+  // load the ONNX model on every fire (~1s); Claude Code times out and hides
+  // the status bar (#2450). The migration replaces the whole command with
+  // NEW_STATUSLINE_CMD which invokes the local helper directly via `node -e`.
+  const BROKEN_STATUSLINE_RE = /(?:npx\s+(?:--?\S+\s+)*)?@?claude-flow(?:\/cli)?(?:@\S+)?\s+hooks\s+statusline/;
   const existingStatusLine = existing.statusLine as Record<string, unknown> | undefined;
   if (existingStatusLine) {
     const existingCmd = typeof existingStatusLine.command === 'string' ? existingStatusLine.command : '';
