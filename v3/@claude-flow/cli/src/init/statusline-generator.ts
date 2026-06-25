@@ -501,6 +501,38 @@ function getCostFromStdin() {
   return null;
 }
 
+// Claude.ai subscription rate limits from Claude Code stdin. These are the same
+// numbers shown in Settings -> Plan usage: five_hour = current session window,
+// seven_day = weekly window. Only present for subscribers after the first API
+// response; returns null otherwise (so the caller simply omits the line).
+function getPlanLimitsFromStdin() {
+  const data = getStdinData();
+  if (!data || !data.rate_limits) return null;
+  const rl = data.rate_limits;
+
+  function fmtReset(resetsAt) {
+    if (!resetsAt) return '-';
+    const secsLeft = Math.max(0, Math.floor(resetsAt - Date.now() / 1000));
+    const totalMin = Math.ceil(secsLeft / 60);
+    const days = Math.floor(totalMin / 1440);
+    const hrs = Math.floor((totalMin % 1440) / 60);
+    const mins = totalMin % 60;
+    if (days > 0) return days + 'd ' + hrs + 'h';
+    if (hrs > 0) return hrs + 'h ' + mins + 'm';
+    return mins + 'm';
+  }
+
+  const five = rl.five_hour || null;
+  const seven = rl.seven_day || null;
+  return {
+    fiveHourPct: five ? Math.round(five.used_percentage) : null,
+    fiveHourReset: five ? fmtReset(five.resets_at) : null,
+    fiveHourSoon: five ? (five.resets_at - Date.now() / 1000) < 1800 : false,
+    sevenDayPct: seven ? Math.round(seven.used_percentage) : null,
+    sevenDayReset: seven ? fmtReset(seven.resets_at) : null,
+  };
+}
+
 // Read package version from the first package.json we find.
 function getPkgVersion() {
   let ver = '3.6';
@@ -621,6 +653,36 @@ function generateStatusline() {
     header += '  ' + c.dim + '│' + c.reset + '  ' + c.brightYellow + CONFIG.costSymbol + costInfo.costUsd.toFixed(2) + c.reset;
   }
   lines.push(header);
+
+  // Plan-usage line: real Claude subscription limits from stdin rate_limits.
+  // Only rendered for subscribers after the first API response (the field is
+  // absent otherwise). Shows the 5-hour session window and, when present, the
+  // 7-day weekly window side by side, each coloured by its own severity, with a
+  // warning keyed to whichever window is closest to its cap so a heavy run sees
+  // the wall coming before work gets cut off.
+  const planLimits = getPlanLimitsFromStdin();
+  if (planLimits && planLimits.fiveHourPct !== null) {
+    const planBarW = 7;
+    const planMkBar = function (p) {
+      const f = Math.max(0, Math.min(planBarW, Math.round((p / 100) * planBarW)));
+      return '▓'.repeat(f) + '░'.repeat(planBarW - f);
+    };
+    const planCol = function (p) { return p >= 80 ? c.brightRed : p >= 50 ? c.brightYellow : c.brightGreen; };
+    const p5 = planLimits.fiveHourPct;
+    let planLine = '⚡ ' + c.dim + '5h ' + c.reset + planCol(p5) + '[' + planMkBar(p5) + '] ' +
+      String(p5).padStart(2) + '%' + c.reset + ' ' +
+      (planLimits.fiveHourSoon ? c.brightRed : c.dim) + '↺' + planLimits.fiveHourReset + c.reset;
+    let planPeak = p5;
+    if (planLimits.sevenDayPct !== null) {
+      const p7 = planLimits.sevenDayPct;
+      planPeak = Math.max(p5, p7);
+      planLine += '  ' + c.dim + '│' + c.reset + '  ' + c.dim + '7d ' + c.reset + planCol(p7) + '[' + planMkBar(p7) + '] ' +
+        String(p7).padStart(2) + '%' + c.reset + ' ' + c.dim + '↺' + planLimits.sevenDayReset + c.reset;
+    }
+    if (planPeak >= 90) planLine += '  ' + c.bold + c.brightRed + '⚠ LIMIT' + c.reset;
+    else if (planPeak >= 80) planLine += '  ' + c.brightRed + '⚠' + c.reset;
+    lines.push(planLine);
+  }
 
   // Separator
   lines.push(c.dim + '─'.repeat(53) + c.reset);
