@@ -878,35 +878,62 @@ function generateStatusline() {
   // This is the same number Claude shows in Settings \u2192 Plan-Nutzungslimits.
   // Falls back to cost-based estimate only when running outside Claude Code (no stdin).
   {
-    const bw = 12;
+    // Two real Claude-subscription windows shown side by side so a heavy
+    // workflow can never hit an unseen cap: whichever bar is closest to 100%
+    // is the limit that will stop your work first.
+    const bw = 7; // mini-bar width per usage window
+    const mkBar = (p) => {
+      const f = Math.max(0, Math.min(bw, Math.round((p / 100) * bw)));
+      return '\u2593'.repeat(f) + '\u2591'.repeat(bw - f);
+    };
+    const col = (p) => p >= 80 ? c.brightRed : p >= 50 ? c.brightYellow : c.brightGreen;
+
     const hasPlan = planLimits && planLimits.fiveHourPct !== null;
-    const pct      = hasPlan ? planLimits.fiveHourPct : sessUsage.pct;
-    const resetLbl = hasPlan ? planLimits.fiveHourReset : sessUsage.resetLabel;
-    const resetSoon = hasPlan ? planLimits.fiveHourSoon : sessUsage.resetSoon;
+    const hasWeek = hasPlan && planLimits.sevenDayPct !== null;
 
-    const filled = Math.round((pct / 100) * bw);
-    const bar = '\u2593'.repeat(filled) + '\u2591'.repeat(bw - filled);
-    const bc = pct >= 80 ? c.brightRed : pct >= 50 ? c.brightYellow : c.brightGreen;
-    const rc = resetSoon ? c.brightRed : c.dim;
+    if (hasPlan) {
+      // 5-hour session window (Settings -> "Aktuelle Sitzung").
+      const p5 = planLimits.fiveHourPct;
+      const seg5 = c.dim + '5h ' + c.reset + col(p5) + '[' + mkBar(p5) + '] ' +
+        String(p5).padStart(2) + '%' + c.reset + ' ' +
+        (planLimits.fiveHourSoon ? c.brightRed : c.dim) + '\u21ba' + planLimits.fiveHourReset + c.reset;
 
-    // Secondary info: weekly 7-day limit when available, otherwise API cost estimate
-    let secondaryStr;
-    if (hasPlan && planLimits.sevenDayPct !== null) {
-      const wc = planLimits.sevenDayPct >= 80 ? c.brightRed : planLimits.sevenDayPct >= 50 ? c.brightYellow : c.dim;
-      secondaryStr = wc + '7d ' + planLimits.sevenDayPct + '%' + c.reset +
-        c.dim + ' \u21ba' + planLimits.sevenDayReset + c.reset;
+      // 7-day weekly window (Settings -> "Woechentliche Limits"). When the weekly
+      // window is not yet reported, reuse its slot for the monthly API $ estimate.
+      let segW;
+      if (hasWeek) {
+        const p7 = planLimits.sevenDayPct;
+        segW = c.dim + '7d ' + c.reset + col(p7) + '[' + mkBar(p7) + '] ' +
+          String(p7).padStart(2) + '%' + c.reset + ' ' +
+          c.dim + '\u21ba' + planLimits.sevenDayReset + c.reset;
+      } else {
+        segW = c.dim + 'mo $' + usage.periodCost.toFixed(0) + '/$' + usage.monthlyLimitUSD + ' \u21ba' + usage.daysUntilReset + 'd' + c.reset;
+      }
+
+      // Binding constraint = whichever window is closest to its cap. Warn loudly
+      // so a heavy workflow sees the wall coming before work gets cut off.
+      // \u26a0 only fires near the wall; the yellow bar already carries 50-79% caution
+      // so it is not a persistent nag at moderate weekly usage.
+      const peak = hasWeek ? Math.max(p5, planLimits.sevenDayPct) : p5;
+      let warn = '';
+      if (peak >= 90) warn = '  ' + c.bold + c.brightRed + '\u26a0 LIMIT' + c.reset;
+      else if (peak >= 80) warn = '  ' + c.brightRed + '\u26a0' + c.reset;
+
+      lines.push('\u26a1 ' + seg5 + '  ' + c.dim + '\u2502' + c.reset + '  ' + segW + warn);
     } else {
-      secondaryStr = c.dim + 'mo $' + usage.periodCost.toFixed(0) + '/$' + usage.monthlyLimitUSD + ' \u21ba' + usage.daysUntilReset + 'd' + c.reset;
+      // No stdin (manual terminal run): cost-based estimate, clearly labelled "est".
+      const pct = sessUsage.pct;
+      const filled = Math.max(0, Math.min(12, Math.round((pct / 100) * 12)));
+      const bar = '\u2593'.repeat(filled) + '\u2591'.repeat(12 - filled);
+      const bc = col(pct);
+      const rc = sessUsage.resetSoon ? c.brightRed : c.dim;
+      lines.push(
+        '\u26a1 ' + bc + '[' + bar + ']' + c.reset + ' ' + bc + String(pct).padStart(3) + '%' + c.reset +
+        c.dim + ' est' + c.reset + '  ' + rc + '\u21ba ' + sessUsage.resetLabel + c.reset + '  ' +
+        c.dim + '\u2502' + c.reset + '  ' +
+        c.dim + 'mo $' + usage.periodCost.toFixed(0) + '/$' + usage.monthlyLimitUSD + ' \u21ba' + usage.daysUntilReset + 'd' + c.reset
+      );
     }
-
-    lines.push(
-      '\u26a1 ' + bc + '[' + bar + ']' + c.reset + ' ' +
-      bc + String(pct).padStart(3) + '%' + c.reset +
-      (hasPlan ? c.dim + ' plan' + c.reset : c.dim + ' est' + c.reset) + '  ' +
-      rc + '\u21ba ' + resetLbl + c.reset + '  ' +
-      c.dim + '\u2502' + c.reset + '  ' +
-      secondaryStr
-    );
   }
 
   // Line 2: DDD Domains
@@ -1066,9 +1093,12 @@ function getPlanLimitsFromStdin() {
 
   function fmtReset(resetsAt) {
     if (!resetsAt) return '–';
-    const secsLeft = Math.max(0, resetsAt - Math.floor(Date.now() / 1000));
-    const h = Math.floor(secsLeft / 3600);
-    const m = Math.ceil((secsLeft % 3600) / 60);
+    const secsLeft = Math.max(0, Math.floor(resetsAt - Date.now() / 1000));
+    const totalMin = Math.ceil(secsLeft / 60);
+    const d = Math.floor(totalMin / 1440);
+    const h = Math.floor((totalMin % 1440) / 60);
+    const m = totalMin % 60;
+    if (d > 0) return d + 'd ' + h + 'h';
     if (h > 0) return h + 'h ' + m + 'm';
     return m + 'm';
   }
